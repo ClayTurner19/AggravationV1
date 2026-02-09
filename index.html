@@ -1,0 +1,1869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aggravation - Digital Board Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for Multiplayer -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap');
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #2563eb; 
+            overflow: hidden;
+            touch-action: none;
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle at center, #60a5fa, #1e40af); 
+        }
+
+        canvas {
+            filter: drop-shadow(0 25px 50px rgba(0,0,0,0.5));
+            touch-action: none;
+        }
+
+        .ui-panel {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+            border-radius: 1rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+            color: #1f2937;
+            border: 1px solid rgba(255,255,255,0.6);
+        }
+
+        /* Move Log Panel */
+        #move-log {
+            top: 20px;
+            left: 20px;
+            padding: 1rem;
+            width: 260px;
+            max-height: 250px;
+            overflow-y: auto;
+            z-index: 30;
+            font-size: 0.85rem;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none; 
+        }
+        #move-log > * { pointer-events: auto; }
+        
+        #log-content { flex-grow: 1; overflow-y: auto; }
+
+        .log-entry {
+            margin-bottom: 6px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 4px;
+            line-height: 1.3;
+        }
+        .log-header { font-weight: 700; font-size: 0.9rem; }
+        .log-detail { color: #64748b; font-size: 0.8rem; }
+
+        /* Setup Panel */
+        #setup-panel {
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 2rem;
+            z-index: 50;
+            text-align: center;
+            min-width: 400px;
+            max-width: 95vw;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .player-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            padding: 0.5rem;
+            background: #f8fafc;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 60;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Menu Button */
+        #menu-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 40;
+            background: white;
+            color: #1e3a8a;
+            padding: 0.5rem 1.2rem;
+            border-radius: 0.5rem;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+        #menu-btn:hover { transform: scale(1.05); }
+
+        #recenter-btn {
+            position: absolute;
+            bottom: 240px; 
+            right: 20px;
+            z-index: 40;
+            background: white;
+            color: #1e3a8a;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-size: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            cursor: pointer;
+            transition: all 0.2s;
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.8);
+        }
+        #recenter-btn.visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: scale(1);
+        }
+        #recenter-btn:hover { background-color: #f0f9ff; }
+
+        /* Controls */
+        #controls {
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            align-items: center;
+            min-width: 150px;
+            border: 1px solid rgba(255,255,255,0.4);
+            z-index: 40;
+            pointer-events: auto; 
+        }
+
+        .player-badge {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 10px;
+            border: 2px solid rgba(0,0,0,0.1);
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.5);
+        }
+
+        .die-face {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #fff, #f1f5f9);
+            border-radius: 20px;
+            border: 1px solid #cbd5e0;
+            display: grid;
+            place-items: center;
+            font-size: 36px;
+            font-weight: 800;
+            color: #333;
+            box-shadow: 0 8px 15px -3px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,1);
+            cursor: pointer;
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        .die-face:active { transform: scale(0.9); }
+        .die-face:hover { transform: scale(1.05); }
+        .die-face:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        .hidden { display: none !important; }
+
+        .btn {
+            background: linear-gradient(to bottom, #3b82f6, #2563eb);
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            border: 1px solid #1d4ed8;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-shadow: 0 1px 1px rgba(0,0,0,0.2);
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; background: #9ca3af; border-color: #6b7280; }
+        .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .btn-red { background: linear-gradient(to bottom, #ef4444, #dc2626); border-color: #b91c1c; }
+        .btn-green { background: linear-gradient(to bottom, #22c55e, #16a34a); border-color: #15803d; }
+        .btn-yellow { background: linear-gradient(to bottom, #eab308, #ca8a04); border-color: #a16207; }
+
+        input[type="text"] {
+            border: 1px solid #ccc;
+            border-radius: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            width: 100px;
+            font-size: 0.9rem;
+        }
+        select {
+            border: 1px solid #ccc;
+            border-radius: 0.25rem;
+            padding: 0.25rem;
+            font-size: 0.9rem;
+        }
+        
+        #timer-bar {
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            margin-top: 10px;
+            border-radius: 3px;
+            overflow: hidden;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
+        }
+        #timer-fill {
+            height: 100%;
+            background: linear-gradient(to right, #ef4444, #f87171);
+            width: 100%;
+        }
+        
+        .stats-table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
+        .stats-table th { text-align: left; border-bottom: 2px solid #ddd; padding: 8px; background: #f1f5f9; }
+        .stats-table td { border-bottom: 1px solid #f1f5f9; padding: 8px; }
+        
+        /* Lobby Styles */
+        #lobby-ui {
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="board"></canvas>
+        
+        <!-- UI Elements -->
+        <button id="menu-btn" class="hidden" onclick="toggleMenu()">☰ Menu</button>
+        <button id="recenter-btn" onclick="resetView()">🎯</button>
+        
+        <div id="move-log" class="ui-panel hidden">
+            <h3 class="font-bold text-gray-700 text-sm mb-2 border-b pb-2 flex justify-between items-center">
+                <span>Game Log</span>
+                <span class="text-xs text-gray-400 font-normal">Latest top</span>
+            </h3>
+            <div id="log-content"></div>
+        </div>
+
+        <!-- Setup Panel (Lobby) -->
+        <div id="setup-panel" class="ui-panel">
+            <h1 class="text-4xl font-extrabold mb-1 text-blue-900 tracking-tight" style="text-shadow: 0 2px 4px rgba(0,0,0,0.1);">Aggravation</h1>
+            <p class="text-gray-500 mb-6 font-medium text-xs uppercase tracking-widest">Digital Board Game</p>
+            
+            <!-- Online Toggle -->
+            <div class="mb-4 flex items-center justify-center gap-2">
+                <label class="inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="online-toggle" class="sr-only peer" onchange="toggleOnlineMode()">
+                    <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    <span class="ms-3 text-sm font-medium text-gray-900">Online Multiplayer</span>
+                </label>
+            </div>
+
+            <!-- Lobby UI (Hidden by default) -->
+            <div id="lobby-ui" class="hidden text-left">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-sm font-bold text-gray-700">Status: <span id="conn-status" class="text-orange-500">Local</span></span>
+                    <span class="text-xs text-gray-500" id="player-count">Players: 1/6</span>
+                </div>
+                <div id="host-controls" class="hidden mb-2">
+                    <button class="btn btn-yellow w-full text-xs" onclick="Network.copyInvite()">📋 Copy Invite Link</button>
+                    <p class="text-xs text-gray-400 mt-1 text-center">Share this link to invite friends</p>
+                </div>
+            </div>
+
+            <div class="mb-6 text-left bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <label class="block text-xs font-bold text-gray-600 mb-2 uppercase">Game Speed</label>
+                <select id="setup-speed" class="w-full bg-white border-gray-300 rounded">
+                    <option value="fast">Fast (3s Roll / 6s Move)</option>
+                    <option value="normal" selected>Normal (5s Roll / 15s Move)</option>
+                    <option value="slow">Slow (10s Roll / 30s Move)</option>
+                </select>
+            </div>
+
+            <div id="player-config-list" class="mb-6 text-left space-y-2"></div>
+
+            <button onclick="startGame()" id="start-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg transform transition hover:-translate-y-1">
+                Start Game
+            </button>
+            <p id="setup-error" class="text-red-500 text-xs mt-2 hidden text-center font-bold">Select at least 2 players.</p>
+            <p id="waiting-msg" class="text-blue-500 text-xs mt-2 hidden text-center font-bold animate-pulse">Waiting for Host to Start...</p>
+        </div>
+
+        <!-- In-Game Menu Overlay -->
+        <div id="menu-overlay" class="overlay hidden">
+            <div class="ui-panel p-8 w-80 text-center shadow-2xl">
+                <h2 class="text-3xl font-extrabold mb-6 text-gray-800">Paused</h2>
+                
+                <div class="mb-4 text-left">
+                    <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Game Speed</label>
+                    <select id="menu-speed" class="w-full border p-2 rounded bg-gray-50" onchange="updateSpeed()">
+                        <option value="fast">Fast</option>
+                        <option value="normal">Normal</option>
+                        <option value="slow">Slow</option>
+                    </select>
+                </div>
+
+                <div class="mb-6">
+                    <button id="mute-btn" class="btn w-full" onclick="toggleMute()">Sound: On</button>
+                </div>
+
+                <div class="flex flex-col gap-3 pt-4 border-t">
+                    <button class="btn btn-green" onclick="toggleMenu()">Resume Game</button>
+                    <button class="btn" onclick="showStats(true)">View Statistics</button>
+                    <button class="btn btn-red" onclick="location.reload()">Exit to Title</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Victory Overlay -->
+        <div id="victory-overlay" class="overlay hidden">
+            <div class="ui-panel p-10 text-center animate-bounce shadow-2xl border-4 border-yellow-400">
+                <h1 class="text-5xl font-extrabold text-blue-900 mb-2 drop-shadow-sm">WINNER!</h1>
+                <h2 id="winner-name" class="text-3xl font-bold text-gray-700 mb-8">Player Name</h2>
+                
+                <div class="flex flex-col gap-3">
+                    <button id="continue-btn" class="btn btn-green w-full py-3 text-lg" onclick="continueGame()">Play for Next Place</button>
+                    <button class="btn w-full" onclick="showStats(false)">View Stats</button>
+                    <button class="btn btn-red w-full" onclick="location.reload()">Exit to Title</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Overlay -->
+        <div id="stats-overlay" class="overlay hidden">
+            <div class="ui-panel p-6 w-[600px] max-w-[95vw] text-center shadow-2xl">
+                <h2 class="text-2xl font-bold mb-4 text-gray-800">Game Statistics</h2>
+                <div class="overflow-y-auto max-h-[60vh] mb-6 border rounded-lg">
+                    <table class="stats-table">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th>Player</th>
+                                <th>Kills</th>
+                                <th>Deaths</th>
+                                <th>Avg Roll</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stats-body" class="bg-white"></tbody>
+                    </table>
+                </div>
+                <button class="btn px-8" onclick="closeStats()">Close</button>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div id="controls" class="ui-panel hidden">
+            <div id="turn-indicator" class="text-lg font-bold flex items-center justify-center w-full mb-2">
+                <span id="current-player-badge" class="player-badge"></span>
+                <span id="turn-text">Red's Turn</span>
+            </div>
+            
+            <button id="roll-btn" class="die-face">🎲</button>
+            
+            <button id="pass-btn" class="btn btn-red w-full mt-3 hidden text-xs py-2 shadow-md" onclick="playerPass()">
+                Pass Turn
+            </button>
+
+            <div id="message-area" class="text-xs text-center text-gray-500 font-medium leading-tight h-6 w-full flex items-center justify-center mt-2">
+                Roll to start!
+            </div>
+            
+            <div id="timer-bar"><div id="timer-fill"></div></div>
+        </div>
+    </div>
+
+<script>
+/**
+ * AGGRAVATION GAME ENGINE - FIXED
+ */
+
+// --- Audio (Synthesized) ---
+const Sound = (() => {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let noiseBuffer = null;
+
+    function initNoise() {
+        if (noiseBuffer) return;
+        const bufferSize = ctx.sampleRate * 2; 
+        noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    }
+    
+    function playTone(freq, type, duration, vol = 0.1, decay = 0.01) {
+        if(gameState.muted) return;
+        if(ctx.state === 'suspended') ctx.resume();
+        try {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+            gain.gain.setValueAtTime(vol, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(decay, ctx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + duration);
+        } catch(e) {}
+    }
+
+    return {
+        init: () => { if(ctx.state === 'suspended') ctx.resume(); },
+        roll: () => {
+            if(gameState.muted) return;
+            if(ctx.state === 'suspended') ctx.resume();
+            initNoise();
+            const t = ctx.currentTime;
+            for(let i=0; i<5; i++) {
+                try {
+                    const src = ctx.createBufferSource();
+                    src.buffer = noiseBuffer;
+                    const filter = ctx.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.value = 800 + Math.random() * 400; 
+                    const gain = ctx.createGain();
+                    src.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(ctx.destination);
+                    const start = t + i * 0.06; 
+                    gain.gain.setValueAtTime(0.4, start);
+                    gain.gain.exponentialRampToValueAtTime(0.01, start + 0.1);
+                    src.start(start);
+                    src.stop(start + 0.15);
+                } catch(e) {}
+            }
+        },
+        aggravate: () => {
+            playTone(150, 'sawtooth', 0.4, 0.2);
+            setTimeout(() => playTone(100, 'sawtooth', 0.4, 0.2), 100);
+        },
+        turn: () => {
+            playTone(880, 'sine', 0.5, 0.1);
+        },
+        win: () => {
+            if(gameState.muted) return;
+            [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => playTone(f, 'square', 0.4, 0.1), i*120));
+        },
+        hop: () => { /* Silent */ }
+    }
+})();
+
+// --- Networking ---
+const Network = {
+    peer: null,
+    conn: null, 
+    connections: [], 
+    isHost: false,
+    isOnline: false,
+    myId: null,
+    hostId: null,
+    myPlayerIdx: -1, 
+    
+    init: (asHost = false) => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const room = urlParams.get('room');
+        
+        if (room) {
+            Network.isHost = false;
+            Network.hostId = room;
+            Network.initPeer();
+            const toggle = document.getElementById('online-toggle');
+            if(toggle) toggle.checked = true;
+            toggleOnlineMode(true); 
+        } else if (asHost) {
+            Network.isHost = true;
+            Network.initPeer();
+        }
+    },
+
+    initPeer: () => {
+        Network.isOnline = true;
+        Network.peer = new Peer();
+        
+        Network.peer.on('open', (id) => {
+            Network.myId = id;
+            updateLobbyStatus('Ready', 'green');
+            
+            if (!Network.isHost && Network.hostId) {
+                Network.connectToHost();
+            } else {
+                Network.isHost = true;
+                document.getElementById('host-controls').classList.remove('hidden');
+                updateLobbyStatus('Hosting', 'blue');
+            }
+        });
+
+        Network.peer.on('connection', (conn) => {
+            if (Network.isHost) {
+                Network.connections.push(conn);
+                Network.setupConnection(conn);
+                Network.broadcast({ type: 'LOBBY_UPDATE', count: Network.connections.length + 1 });
+                document.getElementById('player-count').innerText = `Players: ${Network.connections.length + 1}/6`;
+            }
+        });
+        
+        Network.peer.on('error', (err) => {
+            console.error(err);
+            updateLobbyStatus('Error', 'red');
+        });
+    },
+
+    connectToHost: () => {
+        updateLobbyStatus('Connecting...', 'orange');
+        const conn = Network.peer.connect(Network.hostId);
+        Network.conn = conn;
+        Network.setupConnection(conn);
+    },
+
+    setupConnection: (conn) => {
+        conn.on('open', () => {
+            if (!Network.isHost) {
+                updateLobbyStatus('Connected', 'green');
+                document.getElementById('start-btn').classList.add('hidden');
+                document.getElementById('waiting-msg').classList.remove('hidden');
+                document.getElementById('player-config-list').innerHTML = '<p class="text-sm text-gray-500 italic">Waiting for host to configure game...</p>';
+            }
+        });
+
+        conn.on('data', (data) => {
+            Network.handleData(data);
+        });
+    },
+
+    broadcast: (data) => {
+        if (Network.isHost) {
+            Network.connections.forEach(c => c.send(data));
+        } else if (Network.conn) {
+            Network.conn.send(data);
+        }
+    },
+
+    handleData: (data) => {
+        switch (data.type) {
+            case 'START_GAME':
+                if (!Network.isHost) {
+                    const speed = data.config.speed;
+                    document.getElementById('setup-speed').value = speed;
+                    gameState.config.speed = speed;
+                    initGame(data.players);
+                    Network.myPlayerIdx = data.myIdx; 
+                }
+                break;
+            case 'ROLL':
+                if (gameState.phase !== 'ROLL') return; 
+                gameState.die = data.value;
+                const btn = document.getElementById('roll-btn');
+                btn.innerText = gameState.die;
+                btn.style.transform = 'rotate(360deg)';
+                Sound.roll();
+                setTimeout(() => { 
+                    btn.style.transform = 'none';
+                    gameState.players[gameState.currPlayer].stats.rolls[data.value]++;
+                    calculateMoves(); 
+                    startTurnTimer();
+                }, 300);
+                break;
+            case 'MOVE':
+                const move = gameState.validMoves.find(m => m.marbleId === data.move.marbleId && m.targetNodeId === data.move.targetNodeId);
+                if (move) executeMove(move);
+                break;
+            case 'PASS':
+                playerPass();
+                break;
+            case 'LOBBY_UPDATE':
+                document.getElementById('player-count').innerText = `Players: ${data.count}/6`;
+                break;
+        }
+    },
+    
+    copyInvite: () => {
+        const link = `${window.location.origin}${window.location.pathname}?room=${Network.myId}`;
+        const textArea = document.createElement("textarea");
+        textArea.value = link;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            const btn = document.querySelector('#host-controls button');
+            const originalText = btn.innerText;
+            btn.innerText = "Copied!";
+            setTimeout(() => btn.innerText = originalText, 2000);
+        } catch (err) {
+            console.error('Fallback: Oops, unable to copy', err);
+            prompt("Copy this link:", link);
+        }
+        document.body.removeChild(textArea);
+    }
+};
+
+function toggleOnlineMode(force = false) {
+    const isOnline = document.getElementById('online-toggle').checked || force;
+    const lobbyUI = document.getElementById('lobby-ui');
+    
+    if (isOnline) {
+        lobbyUI.classList.remove('hidden');
+        if (!Network.peer) Network.init(true); 
+    } else {
+        lobbyUI.classList.add('hidden');
+    }
+}
+
+function updateLobbyStatus(text, color) {
+    const el = document.getElementById('conn-status');
+    el.innerText = text;
+    el.className = `text-${color}-500 font-bold`;
+}
+
+const COLORS = [
+    { name: 'Red', hex: '#ef4444', ringHex: '#fee2e2' },
+    { name: 'Blue', hex: '#3b82f6', ringHex: '#dbeafe' },
+    { name: 'Yellow', hex: '#eab308', ringHex: '#fef3c7' },
+    { name: 'Purple', hex: '#a855f7', ringHex: '#f3e8ff' },
+    { name: 'Green', hex: '#22c55e', ringHex: '#dcfce7' },
+    { name: 'Orange', hex: '#f97316', ringHex: '#ffedd5' }
+];
+
+const R_OUTER = 320;      
+const HOLE_RADIUS = 10;
+const MARBLE_RADIUS = 9;
+const BASE_DIST = 360;    
+
+const SPEED_SETTINGS = {
+    fast: { rollTime: 3, moveTime: 6, animStep: 0.25 },
+    normal: { rollTime: 5, moveTime: 15, animStep: 0.12 },
+    slow: { rollTime: 10, moveTime: 30, animStep: 0.06 }
+};
+
+let gameState = {
+    players: [],
+    currPlayer: 0,
+    die: null,
+    phase: 'SETUP', 
+    pausedPhase: null, 
+    marbles: [],
+    nodes: [],
+    validMoves: [], 
+    selectedMarble: null,
+    animating: false,
+    logs: [],
+    config: { speed: 'normal' },
+    timer: null,
+    timeLeft: 0,
+    timeoutId: null,
+    muted: false,
+    finishedPlayers: [],
+    view: { x: 0, y: 0, zoom: 1 },
+    baseScale: 1,
+    statsSource: null
+};
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+// --- Input System ---
+const Input = {
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    pinchDist: 0,
+    
+    init: () => {
+        const unlockAudio = () => {
+            Sound.init();
+            window.removeEventListener('mousedown', unlockAudio);
+            window.removeEventListener('touchstart', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+        };
+        window.addEventListener('mousedown', unlockAudio);
+        window.addEventListener('touchstart', unlockAudio);
+        window.addEventListener('keydown', unlockAudio);
+
+        canvas.addEventListener('mousedown', Input.onDown);
+        window.addEventListener('mousemove', Input.onMove);
+        window.addEventListener('mouseup', Input.onUp);
+        
+        canvas.addEventListener('touchstart', Input.onTouchStart, {passive: false});
+        canvas.addEventListener('touchmove', Input.onTouchMove, {passive: false});
+        canvas.addEventListener('touchend', Input.onTouchEnd);
+        canvas.addEventListener('wheel', Input.onWheel, {passive: false});
+        
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                const p = gameState.players[gameState.currPlayer];
+                if(Network.isOnline && p.id !== Network.myPlayerIdx && !p.isAI) return;
+                
+                if (gameState.phase === 'ROLL' && !p.isAI) {
+                    rollDie();
+                }
+            }
+        });
+    },
+    
+    onDown: (e) => {
+        if(gameState.phase === 'PAUSED') return;
+        Input.isDragging = false;
+        Input.startX = e.clientX;
+        Input.startY = e.clientY;
+        Input.lastX = e.clientX;
+        Input.lastY = e.clientY;
+    },
+    
+    onMove: (e) => {
+        if(e.buttons === 1) { 
+            const dx = e.clientX - Input.startX;
+            const dy = e.clientY - Input.startY;
+            if(Math.hypot(dx, dy) > 5) {
+                Input.isDragging = true;
+                gameState.view.x += e.clientX - Input.lastX;
+                gameState.view.y += e.clientY - Input.lastY;
+                Input.lastX = e.clientX;
+                Input.lastY = e.clientY;
+                checkViewReset();
+                draw();
+            }
+        }
+    },
+    
+    onUp: (e) => {
+        if(!Input.isDragging && e.target === canvas) {
+            handleClick(e.clientX, e.clientY);
+        }
+        Input.isDragging = false;
+    },
+    
+    onTouchStart: (e) => {
+        if(e.touches.length === 2) {
+            Input.pinchDist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+        } else {
+            Input.startX = e.touches[0].clientX;
+            Input.startY = e.touches[0].clientY;
+            Input.lastX = Input.startX;
+            Input.lastY = Input.startY;
+            Input.isDragging = false;
+        }
+    },
+    
+    onTouchMove: (e) => {
+        e.preventDefault();
+        if(e.touches.length === 2) {
+            const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            if(Input.pinchDist) {
+                const delta = dist - Input.pinchDist;
+                gameState.view.zoom = Math.max(0.5, Math.min(3, gameState.view.zoom + delta * 0.005));
+                Input.pinchDist = dist;
+                checkViewReset();
+                draw();
+            }
+        } else {
+            const cx = e.touches[0].clientX;
+            const cy = e.touches[0].clientY;
+            if(Math.hypot(cx - Input.startX, cy - Input.startY) > 5) {
+                Input.isDragging = true;
+                gameState.view.x += cx - Input.lastX;
+                gameState.view.y += cy - Input.lastY;
+                Input.lastX = cx;
+                Input.lastY = cy;
+                checkViewReset();
+                draw();
+            }
+        }
+    },
+    
+    onTouchEnd: (e) => {
+        if(!Input.isDragging && e.changedTouches.length > 0) {
+            handleClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        }
+        Input.isDragging = false;
+        Input.pinchDist = null;
+    },
+    
+    onWheel: (e) => {
+        e.preventDefault();
+        gameState.view.zoom = Math.max(0.5, Math.min(3, gameState.view.zoom - e.deltaY * 0.001));
+        checkViewReset();
+        draw();
+    }
+};
+
+function checkViewReset() {
+    const btn = document.getElementById('recenter-btn');
+    const changed = gameState.view.x !== 0 || gameState.view.y !== 0 || Math.abs(gameState.view.zoom - 1) > 0.05;
+    if(changed) btn.classList.add('visible');
+    else btn.classList.remove('visible');
+}
+
+function resetView() {
+    gameState.view = { x: 0, y: 0, zoom: 1 };
+    checkViewReset();
+    draw();
+}
+
+function handleClick(clientX, clientY) {
+    const p = gameState.players[gameState.currPlayer];
+    
+    if (gameState.phase !== 'SELECT' || p.isAI) return;
+    if (Network.isOnline && p.colorIdx !== Network.myPlayerIdx) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    
+    const rawX = clientX - rect.left - cx - gameState.view.x;
+    const rawY = clientY - rect.top - cy - gameState.view.y;
+    
+    const totalScale = gameState.baseScale * gameState.view.zoom;
+    const x = rawX / totalScale;
+    const y = rawY / totalScale;
+    
+    const hit = gameState.nodes.find(n => Math.hypot(n.x - x, n.y - y) < HOLE_RADIUS * 2.5);
+    
+    if (hit) {
+        if (gameState.selectedMarble) {
+            const move = gameState.validMoves.find(m => m.marbleId === gameState.selectedMarble.id && m.targetNodeId === hit.id);
+            if (move) { executeMove(move); return; }
+        }
+        const marble = gameState.marbles.find(m => m.nodeId === hit.id && m.player.id === p.id);
+        if (marble && gameState.validMoves.some(vm => vm.marbleId === marble.id)) {
+            gameState.selectedMarble = marble;
+            draw();
+        }
+    } else {
+        gameState.selectedMarble = null;
+        draw();
+    }
+}
+
+// --- Setup ---
+
+function initSetupUI() {
+    const container = document.getElementById('player-config-list');
+    container.innerHTML = '';
+    COLORS.forEach((c, i) => {
+        const row = document.createElement('div');
+        row.className = 'player-row';
+        const badge = document.createElement('div');
+        badge.className = 'w-6 h-6 rounded-full border border-gray-300 shadow-sm';
+        badge.style.backgroundColor = c.hex;
+        const label = document.createElement('span');
+        label.className = 'font-bold text-sm w-16 text-gray-700';
+        label.innerText = c.name;
+        const select = document.createElement('select');
+        select.id = `type-${i}`;
+        select.className = "border rounded px-2 py-1 text-sm";
+        select.onchange = () => toggleNameInput(i);
+        ['None', 'Human', 'CPU'].forEach(opt => {
+            const o = document.createElement('option');
+            o.value = opt;
+            o.innerText = opt;
+            if(opt === 'Human' && (i===0 || i===1)) o.selected = true;
+            else if(opt === 'None' && i > 3) o.selected = true;
+            else if(opt === 'CPU' && (i===2 || i===3)) o.selected = true;
+            else if(opt === 'None') o.selected = true; 
+            select.appendChild(o);
+        });
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = `name-${i}`;
+        input.placeholder = 'Name';
+        input.value = c.name; 
+        if (select.value !== 'Human') input.disabled = true;
+        row.appendChild(badge);
+        row.appendChild(label);
+        row.appendChild(select);
+        row.appendChild(input);
+        container.appendChild(row);
+    });
+}
+
+function toggleNameInput(idx) {
+    const type = document.getElementById(`type-${idx}`).value;
+    const input = document.getElementById(`name-${idx}`);
+    input.disabled = (type !== 'Human');
+}
+
+function startGame() {
+    Sound.init(); 
+    
+    if (Network.isOnline && !Network.isHost) return; 
+
+    const config = [];
+    let pCount = 0;
+    COLORS.forEach((c, i) => {
+        const type = document.getElementById(`type-${i}`).value;
+        if (type !== 'None') {
+            const name = document.getElementById(`name-${i}`).value || c.name;
+            config.push({ colorIdx: i, type: type, name: name });
+            pCount++;
+        }
+    });
+
+    if (pCount < 2) {
+        document.getElementById('setup-error').classList.remove('hidden');
+        return;
+    }
+
+    const speed = document.getElementById('setup-speed').value;
+    gameState.config.speed = speed;
+    document.getElementById('menu-speed').value = speed; 
+
+    initGame(config);
+    
+    if (Network.isHost) {
+        const playerIds = config.map(c => c.colorIdx);
+        const hostSlotIdx = config.findIndex(c => c.type === 'Human');
+        if(hostSlotIdx !== -1) Network.myPlayerIdx = config[hostSlotIdx].colorIdx;
+        
+        Network.connections.forEach((conn, i) => {
+            const humanSlots = config.filter(c => c.type === 'Human');
+            const guestSlot = humanSlots[i+1];
+            
+            if(guestSlot) {
+                conn.send({ 
+                    type: 'START_GAME', 
+                    players: config, 
+                    myIdx: guestSlot.colorIdx,
+                    config: gameState.config
+                });
+            } else {
+                 conn.send({ type: 'START_GAME', players: config, myIdx: -1, config: gameState.config });
+            }
+        });
+    }
+}
+
+// --- Menu & Stats ---
+
+function toggleMenu() {
+    const overlay = document.getElementById('menu-overlay');
+    if (overlay.classList.contains('hidden')) {
+        if (gameState.phase === 'SETUP' || gameState.phase === 'WIN') return;
+        overlay.classList.remove('hidden');
+        gameState.pausedPhase = gameState.phase;
+        gameState.phase = 'PAUSED';
+        clearInterval(gameState.timer);
+        clearTimeout(gameState.timeoutId);
+        document.getElementById('timer-fill').style.transition = 'none';
+    } else {
+        overlay.classList.add('hidden');
+        if (gameState.pausedPhase) {
+            gameState.phase = gameState.pausedPhase;
+            gameState.pausedPhase = null;
+            if (gameState.phase === 'ROLL' || gameState.phase === 'SELECT') {
+                startTurnTimer(gameState.timeLeft); 
+                checkAI();
+            } else if (gameState.phase === 'WAIT') {
+                gameState.timeoutId = setTimeout(endTurn, 500); 
+            }
+        }
+    }
+}
+
+function updateSpeed() {
+    const oldSpeed = gameState.config.speed;
+    const newSpeed = document.getElementById('menu-speed').value;
+    gameState.config.speed = newSpeed;
+    const oldSettings = SPEED_SETTINGS[oldSpeed];
+    const newSettings = SPEED_SETTINGS[newSpeed];
+    const maxOld = (gameState.pausedPhase === 'ROLL') ? oldSettings.rollTime : oldSettings.moveTime;
+    const maxNew = (gameState.pausedPhase === 'ROLL') ? newSettings.rollTime : newSettings.moveTime;
+    const ratio = gameState.timeLeft / maxOld;
+    gameState.timeLeft = Math.max(1, ratio * maxNew);
+}
+
+function toggleMute() {
+    gameState.muted = !gameState.muted;
+    const btn = document.getElementById('mute-btn');
+    btn.innerText = gameState.muted ? "Sound: Off" : "Sound: On";
+    btn.className = gameState.muted ? "btn btn-red w-full" : "btn w-full";
+}
+
+function showStats(fromMenu) {
+    if(fromMenu) document.getElementById('menu-overlay').classList.add('hidden');
+    else document.getElementById('victory-overlay').classList.add('hidden');
+    document.getElementById('stats-overlay').classList.remove('hidden');
+    const tbody = document.getElementById('stats-body');
+    tbody.innerHTML = '';
+    gameState.players.forEach(p => {
+        const tr = document.createElement('tr');
+        let sum = 0, count = 0;
+        p.stats.rolls.forEach((n, i) => { sum += n*i; count += n; });
+        const avg = count > 0 ? (sum/count).toFixed(1) : '-';
+        tr.innerHTML = `<td style="color:${p.color.hex}; font-weight:bold;">${p.name}</td><td>${p.stats.kills}</td><td>${p.stats.deaths}</td><td>${avg}</td>`;
+        tbody.appendChild(tr);
+    });
+    gameState.statsSource = fromMenu ? 'menu' : 'victory';
+}
+
+function closeStats() {
+    document.getElementById('stats-overlay').classList.add('hidden');
+    if (gameState.statsSource === 'menu') document.getElementById('menu-overlay').classList.remove('hidden');
+    else document.getElementById('victory-overlay').classList.remove('hidden');
+}
+
+// --- Game Logic ---
+
+function initGame(config) {
+    gameState.players = [];
+    gameState.logs = [];
+    gameState.finishedPlayers = [];
+    config.forEach((cfg, i) => {
+        gameState.players.push({
+            id: i,
+            colorIdx: cfg.colorIdx,
+            color: COLORS[cfg.colorIdx],
+            name: cfg.name,
+            isAI: cfg.type === 'CPU',
+            marbles: [0, 1, 2, 3],
+            homeNodes: [],
+            baseNodes: [],
+            startNode: -1, 
+            homeEntryNode: -1,
+            stats: { rolls: [0,0,0,0,0,0,0], kills: 0, deaths: 0 }
+        });
+    });
+    generateGraph();
+    gameState.players.forEach(p => {
+        const start = gameState.nodes.find(n => n.type === 'START' && n.sector === p.colorIdx);
+        p.startNode = start.id;
+        const preStart = gameState.nodes.find(n => n.next && n.next.includes(start.id) && n.type === 'MAIN');
+        if (preStart) p.homeEntryNode = preStart.id;
+        p.baseNodes = gameState.nodes.filter(n => n.type === 'BASE' && n.colorIdx === p.colorIdx).map(n => n.id);
+        p.homeNodes = gameState.nodes.filter(n => n.type === 'HOME' && n.colorIdx === p.colorIdx).sort((a,b) => a.step - b.step).map(n => n.id);
+    });
+    placeMarbles();
+    gameState.phase = 'ROLL';
+    gameState.currPlayer = 0;
+    document.getElementById('setup-panel').classList.add('hidden');
+    document.getElementById('controls').classList.remove('hidden');
+    document.getElementById('move-log').classList.remove('hidden');
+    document.getElementById('menu-btn').classList.remove('hidden');
+    addLog("System", "Game Started", null);
+    updateUI();
+    resize();
+    startTurnTimer();
+}
+
+function generateGraph() {
+    gameState.nodes = [];
+    const stars = [];
+    for(let i=0; i<6; i++) {
+        const angle = (i * 60 + 30) * Math.PI / 180;
+        const rStar = 140; 
+        const x = Math.cos(angle) * rStar;
+        const y = Math.sin(angle) * rStar;
+        const id = gameState.nodes.length;
+        gameState.nodes.push({ id, x, y, type: 'STAR', sector: i });
+        stars.push(id);
+    }
+    for(let i=0; i<6; i++) {
+        const angle = i * 60 * Math.PI / 180;
+        const toGlobal = (lx, ly) => ({
+            x: lx * Math.cos(angle) - ly * Math.sin(angle),
+            y: lx * Math.sin(angle) + ly * Math.cos(angle)
+        });
+        const startPos = toGlobal(R_OUTER, 0);
+        const startId = gameState.nodes.length;
+        gameState.nodes.push({ id: startId, x: startPos.x, y: startPos.y, type: 'START', sector: i, colorIdx: i });
+        const leftH1Pos = toGlobal(R_OUTER, 35);
+        const leftH1Id = gameState.nodes.length;
+        gameState.nodes.push({ id: leftH1Id, x: leftH1Pos.x, y: leftH1Pos.y, type: 'MAIN', sector: i });
+        const leftCornerPos = toGlobal(R_OUTER, 70);
+        const leftCornerId = gameState.nodes.length;
+        gameState.nodes.push({ id: leftCornerId, x: leftCornerPos.x, y: leftCornerPos.y, type: 'MAIN', sector: i });
+        let prevId = leftCornerId;
+        for(let step=1; step<=4; step++) {
+            const lx = R_OUTER - (step * ((R_OUTER - 121)/5));
+            const pos = toGlobal(lx, 70);
+            const id = gameState.nodes.length;
+            gameState.nodes.push({ id, x: pos.x, y: pos.y, type: 'MAIN', sector: i });
+            link(prevId, id);
+            prevId = id;
+        }
+        link(prevId, stars[i]); 
+        link(startId, leftH1Id);
+        link(leftH1Id, leftCornerId);
+        const prevStarIdx = (i === 0) ? 5 : i - 1;
+        const prevStarId = stars[prevStarIdx];
+        let topId = prevStarId;
+        for(let step=1; step<=4; step++) {
+            const lx = 121 + (step * ((R_OUTER - 121)/5));
+            const pos = toGlobal(lx, -70);
+            const id = gameState.nodes.length;
+            gameState.nodes.push({ id, x: pos.x, y: pos.y, type: 'MAIN', sector: i });
+            link(topId, id);
+            topId = id;
+        }
+        const rightCornerPos = toGlobal(R_OUTER, -70);
+        const rightCornerId = gameState.nodes.length;
+        gameState.nodes.push({ id: rightCornerId, x: rightCornerPos.x, y: rightCornerPos.y, type: 'MAIN', sector: i });
+        link(topId, rightCornerId);
+        const rightH1Pos = toGlobal(R_OUTER, -35);
+        const rightH1Id = gameState.nodes.length;
+        gameState.nodes.push({ id: rightH1Id, x: rightH1Pos.x, y: rightH1Pos.y, type: 'MAIN', sector: i });
+        link(rightCornerId, rightH1Id);
+        link(rightH1Id, startId); 
+        
+        // Base - Straight line logic
+        const baseX = 370; 
+        const spacing = 24;
+        const offsets = [-1.5, -0.5, 0.5, 1.5]; 
+        
+        for(let b=0; b<4; b++) {
+            const ly = offsets[b] * spacing;
+            const bPos = toGlobal(baseX, ly);
+            const bid = gameState.nodes.length;
+            gameState.nodes.push({ id: bid, x: bPos.x, y: bPos.y, type: 'BASE', colorIdx: i });
+        }
+        
+        for(let h=0; h<4; h++) {
+            const dist = 280 - (h * 40); 
+            const hPos = toGlobal(dist, 0);
+            const hid = gameState.nodes.length;
+            gameState.nodes.push({ id: hid, x: hPos.x, y: hPos.y, type: 'HOME', colorIdx: i, step: h });
+        }
+    }
+    const centerId = gameState.nodes.length;
+    gameState.nodes.push({ id: centerId, x: 0, y: 0, type: 'CENTER' });
+}
+
+function link(id1, id2) {
+    const n1 = gameState.nodes[id1];
+    if(!n1.next) n1.next = [];
+    n1.next.push(id2);
+}
+
+function placeMarbles() {
+    gameState.marbles = [];
+    gameState.players.forEach(p => {
+        p.marbles.forEach((mIdx, i) => {
+            gameState.marbles.push({
+                id: `${p.id}-${mIdx}`,
+                player: p,
+                nodeId: p.baseNodes[i],
+            });
+        });
+    });
+}
+
+function addLog(player, text, roll) {
+    const rollBadge = roll ? `<span class="bg-gray-100 text-gray-800 px-1 rounded text-xs ml-1 font-mono border">🎲${roll}</span>` : '';
+    const nameSpan = `<span style="color:${typeof player === 'string' ? '#333' : player.color.hex}">${typeof player === 'string' ? player : player.name}</span>`;
+    gameState.logs.unshift({ html: `<div class="log-header">${nameSpan}${rollBadge}</div><div class="log-detail">${text}</div>` });
+    if(gameState.logs.length > 50) gameState.logs.pop();
+    const container = document.getElementById('log-content');
+    container.innerHTML = gameState.logs.map(l => `<div class="log-entry">${l.html}</div>`).join('');
+}
+
+// --- Timers ---
+
+function startTurnTimer(forcedTime) {
+    if (gameState.phase === 'PAUSED' || gameState.phase === 'WIN' || gameState.phase === 'WAIT') return;
+    clearInterval(gameState.timer);
+    
+    const settings = SPEED_SETTINGS[gameState.config.speed];
+    const maxTime = gameState.phase === 'ROLL' ? settings.rollTime : settings.moveTime;
+    gameState.timeLeft = forcedTime !== undefined ? forcedTime : maxTime;
+    
+    const bar = document.getElementById('timer-fill');
+    bar.style.transition = 'none';
+    const currentPct = (gameState.timeLeft / maxTime) * 100;
+    bar.style.width = `${currentPct}%`;
+    void bar.offsetWidth; 
+    
+    requestAnimationFrame(() => {
+        bar.style.transition = `width ${gameState.timeLeft}s linear`;
+        bar.style.width = '0%';
+    });
+
+    gameState.timer = setInterval(() => {
+        if(gameState.phase === 'PAUSED' || gameState.phase === 'WIN') return; 
+        gameState.timeLeft--;
+        if (gameState.timeLeft <= 0) handleTimeout();
+    }, 1000);
+    
+    checkAI();
+}
+
+function handleTimeout() {
+    clearInterval(gameState.timer);
+    if (gameState.phase === 'ROLL') rollDie();
+    else if (gameState.phase === 'SELECT') executeAIMove(); 
+}
+
+function getMarbleProgress(marble) {
+    const node = gameState.nodes[marble.nodeId];
+    if (node.type === 'BASE') return 0;
+    if (node.type === 'HOME') return 60 + (node.step * 10);
+    if (node.type === 'CENTER') return 30;
+    let currentSector = node.sector;
+    if (currentSector === undefined && node.type === 'STAR') currentSector = node.sector; 
+    if (currentSector !== undefined) {
+        let sectorDist = (currentSector - marble.player.colorIdx + 6) % 6;
+        return 10 + (sectorDist * 8);
+    }
+    return 10;
+}
+
+// --- Gameplay Logic ---
+
+function checkAI() {
+    if (gameState.phase === 'PAUSED' || gameState.phase === 'WIN' || gameState.phase === 'WAIT') return;
+    const p = gameState.players[gameState.currPlayer];
+    if (p.isAI) {
+        clearTimeout(gameState.timeoutId);
+        if (gameState.phase === 'ROLL') {
+            gameState.timeoutId = setTimeout(() => {
+                if(gameState.phase === 'ROLL') rollDie();
+            }, 800);
+        } else if (gameState.phase === 'SELECT') {
+            gameState.timeoutId = setTimeout(() => {
+                if(gameState.phase === 'SELECT') executeAIMove();
+            }, 1000);
+        }
+    }
+}
+
+function rollDie() {
+    if (gameState.phase !== 'ROLL' || gameState.animating || gameState.phase === 'PAUSED') return;
+    
+    Sound.roll();
+    clearInterval(gameState.timer); 
+    clearTimeout(gameState.timeoutId);
+    
+    const btn = document.getElementById('roll-btn');
+    btn.style.transform = 'rotate(360deg)';
+    
+    gameState.timeoutId = setTimeout(() => {
+        btn.style.transform = 'none';
+        gameState.die = Math.floor(Math.random() * 6) + 1;
+        btn.innerText = gameState.die;
+        
+        gameState.players[gameState.currPlayer].stats.rolls[gameState.die]++;
+        
+        calculateMoves();
+    }, 300);
+}
+
+function calculateMoves() {
+    if (gameState.phase === 'PAUSED') return;
+    const p = gameState.players[gameState.currPlayer];
+    gameState.validMoves = [];
+    const pMarbles = gameState.marbles.filter(m => m.player.id === p.id);
+    let canMove = false;
+
+    pMarbles.forEach(m => {
+        const node = gameState.nodes[m.nodeId];
+        
+        if (node.type === 'BASE') {
+            if (gameState.die === 1 || gameState.die === 6) {
+                if (isSafe(p.startNode, p)) {
+                    addMove(m, p.startNode, 'START', [m.nodeId, p.startNode]);
+                    canMove = true;
+                }
+            }
+            return;
+        }
+
+        if (node.type === 'CENTER') {
+            if (gameState.die === 1) {
+                gameState.nodes.filter(n => n.type === 'STAR').forEach(star => {
+                    if (isSafe(star.id, p)) {
+                        addMove(m, star.id, 'EXIT_CENTER', [m.nodeId, star.id]);
+                        canMove = true;
+                    }
+                });
+            }
+            return;
+        }
+
+        const targets = getDestinations(m.nodeId, gameState.die, p);
+        targets.forEach(t => {
+            if (isSafe(t.id, p)) {
+                addMove(m, t.id, t.type, t.path);
+                canMove = true;
+            }
+        });
+    });
+
+    if (canMove) {
+        gameState.phase = 'SELECT';
+        startTurnTimer(); 
+        
+        const exitStarIdx = (p.colorIdx + 5) % 6; 
+        const exitStarNode = gameState.nodes.find(n => n.type === 'STAR' && n.sector === exitStarIdx);
+        
+        const isOvershoot = (move) => {
+            const mPath = move.path;
+            const startNode = gameState.nodes[gameState.marbles.find(m=>m.id===move.marbleId).nodeId];
+            if (mPath.includes(p.homeEntryNode) && gameState.nodes[move.targetNodeId].type !== 'HOME') return true;
+            if (move.type === 'STAR_JUMP' && startNode.id === exitStarNode.id) return true;
+            return false;
+        };
+        const allOvershoot = gameState.validMoves.every(m => isOvershoot(m));
+        
+        if (allOvershoot && !p.isAI) document.getElementById('pass-btn').classList.remove('hidden');
+        else document.getElementById('pass-btn').classList.add('hidden');
+
+        if(!p.isAI) updateUI("Select a marble");
+        else updateUI("CPU Thinking...");
+        
+        if(p.isAI && (!Network.isOnline || Network.isHost)) checkAI(); 
+        
+    } else {
+        gameState.phase = 'WAIT';
+        document.getElementById('pass-btn').classList.add('hidden');
+        addLog(p, "No moves possible", gameState.die);
+        updateUI("No moves!");
+        gameState.timeoutId = setTimeout(endTurn, 1500);
+    }
+    draw();
+}
+
+function playerPass() {
+    if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
+    const p = gameState.players[gameState.currPlayer];
+    addLog(p, "Passed Turn", gameState.die);
+    endTurn();
+}
+
+function isThreat(player) {
+    const marblesInHome = gameState.marbles.filter(m => m.player.id === player.id && m.player.homeNodes.includes(m.nodeId)).length;
+    const marblesInBase = gameState.marbles.filter(m => m.player.id === player.id && gameState.nodes[m.nodeId].type === 'BASE').length;
+    return marblesInHome >= 2 || marblesInBase === 0;
+}
+
+function executeAIMove() {
+    if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
+    
+    let bestMove = null;
+    let bestScore = -Infinity;
+    const p = gameState.players[gameState.currPlayer];
+    const exitStarIdx = (p.colorIdx + 5) % 6; 
+    const exitStarNode = gameState.nodes.find(n => n.type === 'STAR' && n.sector === exitStarIdx);
+
+    gameState.validMoves.forEach(move => {
+        let score = Math.random() * 5; 
+        const marble = gameState.marbles.find(m => m.id === move.marbleId);
+        const currentNode = gameState.nodes[marble.nodeId];
+        const target = gameState.nodes[move.targetNodeId];
+        const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.player.id !== p.id);
+        
+        if (target.type === 'HOME') score += 5000; 
+        
+        // Critical Logic: Force Normal Path if at Exit Star
+        if (currentNode.id === exitStarNode.id) {
+            if (move.type === 'NORMAL') score += 2000; 
+            if (move.type === 'STAR_JUMP') score -= 10000; 
+        }
+
+        if (victim) {
+            let killVal = 50;
+            if (isThreat(victim.player)) {
+                killVal = 300; 
+                killVal += getMarbleProgress(victim) * 5;
+            } 
+            score += killVal;
+        }
+
+        if (target.type === 'STAR' && currentNode.type !== 'STAR') score += 250; 
+        if (move.type === 'START') score += 60; 
+        if (move.type === 'ENTER_CENTER') {
+            score -= 500;
+            if (victim && isThreat(victim.player)) score += 1000; 
+        }
+        if (move.type === 'EXIT_CENTER') {
+            if (target.id === exitStarNode.id) score += 500; 
+            else {
+                if (victim && isThreat(victim.player)) score += 600; 
+                else score -= 100;
+            }
+        }
+        if (move.type === 'NORMAL') score += 1;
+        if (move.type === 'STAR_JUMP' && currentNode.id !== exitStarNode.id) score += 30;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    });
+    
+    if (bestMove) executeMove(bestMove);
+    else playerPass(); 
+}
+
+function isSafe(targetId, player) {
+    const occupant = gameState.marbles.find(m => m.nodeId === targetId);
+    if (!occupant) return true;
+    return occupant.player.id !== player.id;
+}
+
+function getDestinations(startNodeId, steps, player) {
+    let dests = [];
+    function traverse(currId, remaining, mode, pathSoFar) {
+        const newPath = [...pathSoFar, currId];
+        const node = gameState.nodes[currId];
+        if (remaining === 0) {
+            dests.push({ id: currId, type: mode, path: newPath });
+            return;
+        }
+        
+        // STRICT CENTER RULE: Must land on Star with remaining=1 (Overshoot by 1)
+        // OR start on Star and roll 1 (Covered by remaining=1 check if step was 1)
+        if (node.type === 'STAR' && remaining === 1) { 
+             const centerNode = gameState.nodes.find(n => n.type === 'CENTER');
+             if (isSafe(centerNode.id, player)) dests.push({ id: centerNode.id, type: 'ENTER_CENTER', path: [...newPath, centerNode.id] });
+        }
+        // Also allow Overshoot by 1 (Arrive at Star with 1 left)
+        if (node.type === 'STAR' && remaining === 1 && steps !== 1) { 
+             const centerNode = gameState.nodes.find(n => n.type === 'CENTER');
+             if (isSafe(centerNode.id, player)) dests.push({ id: centerNode.id, type: 'ENTER_CENTER', path: [...newPath, centerNode.id] });
+        }
+
+        if (node.type === 'STAR' && (mode === 'STAR_JUMP' || remaining === steps)) {
+             const stars = gameState.nodes.filter(n => n.type === 'STAR');
+             const sIdx = stars.findIndex(s => s.id === currId);
+             if (sIdx !== -1) {
+                 const nextStar = stars[(sIdx + 1) % 6];
+                 const blocked = gameState.marbles.some(m => m.nodeId === nextStar.id && m.player.id === player.id);
+                 if (!blocked) traverse(nextStar.id, remaining - 1, 'STAR_JUMP', newPath);
+             }
+        }
+        if (mode !== 'STAR_JUMP' || node.type === 'STAR') {
+            const isBlocked = (nid) => {
+                const occ = gameState.marbles.find(m => m.nodeId === nid);
+                return occ && occ.player.id === player.id;
+            };
+            if (currId === player.homeEntryNode) {
+                if (player.homeNodes.length > 0) {
+                     const nid = player.homeNodes[0];
+                     if (!isBlocked(nid)) traverse(nid, remaining - 1, 'NORMAL', newPath);
+                }
+            }
+            if (node.type === 'HOME') {
+                if (node.step < 3) {
+                     const nextHome = gameState.nodes.find(n => n.type === 'HOME' && n.colorIdx === node.colorIdx && n.step === node.step + 1);
+                     if(nextHome && !isBlocked(nextHome.id)) traverse(nextHome.id, remaining - 1, 'NORMAL', newPath);
+                }
+            }
+            else if (node.next) {
+                node.next.forEach(nid => {
+                     if (!isBlocked(nid)) traverse(nid, remaining - 1, 'NORMAL', newPath);
+                });
+            }
+        }
+    }
+    const startNode = gameState.nodes[startNodeId];
+    traverse(startNodeId, steps, 'NORMAL', []); 
+    if (startNode.type === 'STAR') traverse(startNodeId, steps, 'STAR_JUMP', []);
+    const unique = [];
+    const map = new Set();
+    dests.forEach(d => {
+        const key = d.id + '-' + d.type;
+        if(!map.has(key)) { map.add(key); unique.push(d); }
+    });
+    return unique;
+}
+
+function addMove(marble, targetId, type, path) {
+    const fullPath = (path[0] !== marble.nodeId) ? [marble.nodeId, ...path] : path;
+    gameState.validMoves.push({ marbleId: marble.id, targetNodeId: targetId, type, path: fullPath });
+}
+
+function executeMove(move) {
+    if (gameState.phase === 'PAUSED') return;
+    gameState.animating = true;
+    gameState.phase = 'ANIMATE';
+    gameState.selectedMarble = null;
+    gameState.validMoves = [];
+    document.getElementById('pass-btn').classList.add('hidden');
+    clearInterval(gameState.timer);
+    clearTimeout(gameState.timeoutId);
+    
+    const marble = gameState.marbles.find(m => m.id === move.marbleId);
+    const pathIds = move.path;
+    let currentStep = 0;
+    let progress = 0;
+    const targetNode = gameState.nodes[move.targetNodeId];
+    let actionTxt = "Moves";
+    if (move.type === 'START') actionTxt = "Exits Base";
+    if (move.type === 'ENTER_CENTER') actionTxt = "Enters Center";
+    if (move.type === 'EXIT_CENTER') actionTxt = "Exits Center";
+    if (targetNode.type === 'HOME') actionTxt = "Enters Home";
+    const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.id !== marble.id);
+    if(victim) actionTxt = `Aggravates ${victim.player.name}`;
+    addLog(marble.player, actionTxt, gameState.die);
+    const speed = SPEED_SETTINGS[gameState.config.speed].animStep;
+
+    const animate = () => {
+        if (gameState.phase === 'PAUSED') {
+            requestAnimationFrame(animate); 
+            return;
+        }
+        progress += speed; 
+        if (progress >= 1) {
+            progress = 0;
+            currentStep++;
+            if (currentStep >= pathIds.length - 1) {
+                finishMove(move, marble);
+                return;
+            }
+        }
+        const n1 = gameState.nodes[pathIds[currentStep]];
+        const n2 = gameState.nodes[pathIds[currentStep+1]];
+        const cx = n1.x + (n2.x - n1.x) * progress;
+        const cy = n1.y + (n2.y - n1.y) * progress;
+        draw(cx, cy, marble);
+        gameState.animationFrameId = requestAnimationFrame(animate);
+    };
+    animate();
+}
+
+function finishMove(move, marble) {
+    marble.nodeId = move.targetNodeId;
+    gameState.animating = false;
+    const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.id !== marble.id);
+    if (victim) {
+        Sound.aggravate();
+        marble.player.stats.kills++;
+        victim.player.stats.deaths++;
+        const emptyBase = victim.player.baseNodes.find(bid => !gameState.marbles.some(m => m.nodeId === bid));
+        victim.nodeId = emptyBase || victim.player.baseNodes[0];
+    }
+    
+    const homeCount = gameState.marbles.filter(m => m.player.id === marble.player.id && marble.player.homeNodes.includes(m.nodeId)).length;
+    if (homeCount === 4) {
+        Sound.win();
+        gameState.phase = 'WIN';
+        gameState.finishedPlayers.push(marble.player);
+        document.getElementById('winner-name').innerText = marble.player.name;
+        document.getElementById('victory-overlay').classList.remove('hidden');
+        
+        const activePlayers = gameState.players.filter(p => !gameState.finishedPlayers.includes(p));
+        if (activePlayers.length <= 1) {
+            document.getElementById('continue-btn').style.display = 'none';
+        } else {
+            document.getElementById('continue-btn').style.display = 'block';
+        }
+    } else {
+        if (gameState.die === 6) {
+            gameState.phase = 'ROLL';
+            updateUI("Rolled 6! Roll Again.");
+            checkAI();
+        } else {
+            endTurn();
+        }
+    }
+    draw();
+}
+
+function continueGame() {
+    document.getElementById('victory-overlay').classList.add('hidden');
+    endTurn(); 
+}
+
+function endTurn() {
+    if (gameState.phase === 'PAUSED') return;
+    
+    clearInterval(gameState.timer); 
+    clearTimeout(gameState.timeoutId); 
+    
+    Sound.turn();
+    let nextIdx = (gameState.currPlayer + 1) % gameState.players.length;
+    let attempts = 0;
+    while(gameState.finishedPlayers.includes(gameState.players[nextIdx]) && attempts < 6) {
+        nextIdx = (nextIdx + 1) % gameState.players.length;
+        attempts++;
+    }
+    
+    const activeCount = gameState.players.length - gameState.finishedPlayers.length;
+    if (activeCount <= 1 && gameState.players.length > 1) {
+        const winner = gameState.players[nextIdx]; 
+        gameState.phase = 'WIN';
+        gameState.finishedPlayers.push(winner);
+        document.getElementById('winner-name').innerText = winner.name + " (Last Standing)";
+        document.getElementById('victory-overlay').classList.remove('hidden');
+        document.getElementById('continue-btn').style.display = 'none';
+        return;
+    }
+
+    gameState.currPlayer = nextIdx;
+    gameState.phase = 'ROLL';
+    gameState.die = null;
+    document.getElementById('pass-btn').classList.add('hidden');
+    updateUI();
+    draw();
+    checkAI();
+}
+
+function updateUI(msg) {
+    const p = gameState.players[gameState.currPlayer];
+    const badge = document.getElementById('current-player-badge');
+    const txt = document.getElementById('turn-text');
+    const msgEl = document.getElementById('message-area');
+    const btn = document.getElementById('roll-btn');
+    badge.style.backgroundColor = p.color.hex;
+    txt.innerText = `${p.name} ${p.isAI ? '(CPU)' : ''}`;
+    txt.style.color = p.color.hex;
+    if (msg) msgEl.innerText = msg;
+    const isHumanTurn = !p.isAI;
+    const canRoll = gameState.phase === 'ROLL' && isHumanTurn;
+    btn.disabled = !canRoll;
+    btn.style.opacity = canRoll ? 1 : 0.5;
+    btn.style.cursor = canRoll ? 'pointer' : 'not-allowed';
+}
+
+function launchConfetti() {
+    for(let i=0; i<100; i++) {
+        const el = document.createElement('div');
+        Object.assign(el.style, {
+            position: 'fixed', left: Math.random()*100+'vw', top: '-10px',
+            width: '10px', height: '10px', backgroundColor: `hsl(${Math.random()*360},70%,50%)`,
+            transition: 'top 3s ease-in, transform 3s linear', zIndex: 100
+        });
+        document.body.appendChild(el);
+        setTimeout(() => {
+            el.style.top = '110vh';
+            el.style.transform = `rotate(${Math.random()*720}deg)`;
+        }, 100);
+        setTimeout(() => el.remove(), 3000);
+    }
+}
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    gameState.baseScale = Math.min(canvas.width, canvas.height) / 950;
+    if (gameState.players.length) draw();
+}
+
+function draw(animX, animY, animMarble) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(canvas.width/2 + gameState.view.x, canvas.height/2 + gameState.view.y);
+    ctx.scale(gameState.baseScale * gameState.view.zoom, gameState.baseScale * gameState.view.zoom);
+    drawBoardBackground();
+    drawConnections();
+    drawNodes();
+    drawMarbles(animX, animY, animMarble);
+    drawHighlights();
+    ctx.restore();
+}
+
+function drawBoardBackground() {
+    for(let i=0; i<6; i++) {
+        const angle = i * 60 * Math.PI / 180;
+        const color = COLORS[i];
+        ctx.save();
+        ctx.rotate(angle);
+        ctx.fillStyle = color.hex;
+        ctx.globalAlpha = 0.2;
+        ctx.beginPath();
+        ctx.roundRect(145, -60, 220, 120, 20); 
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.roundRect(355, -50, 30, 100, 15);
+        ctx.fill();
+        
+        ctx.restore();
+    }
+}
+
+function drawConnections() {
+    ctx.beginPath();
+    ctx.strokeStyle = '#1e40af'; 
+    ctx.lineWidth = 4;
+    ctx.arc(0, 0, 140, 0, Math.PI * 2);
+    ctx.stroke();
+    
+    ctx.beginPath();
+    gameState.nodes.forEach(n => {
+        if (n.next) {
+            n.next.forEach(nid => {
+                const n2 = gameState.nodes[nid];
+                ctx.moveTo(n.x, n.y);
+                ctx.lineTo(n2.x, n2.y);
+            });
+        }
+    });
+    ctx.stroke();
+}
+
+function drawNodes() {
+    gameState.nodes.forEach(n => {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, HOLE_RADIUS, 0, Math.PI*2);
+        ctx.fillStyle = '#1f2937';
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        if (n.type === 'STAR') {
+            drawStarIcon(n.x, n.y);
+            return;
+        }
+        else if (n.type === 'BASE' || n.type === 'HOME' || n.type === 'START') {
+            const c = COLORS[n.colorIdx !== undefined ? n.colorIdx : n.sector];
+            ctx.fillStyle = c.ringHex;
+            ctx.strokeStyle = c.hex;
+            ctx.lineWidth = 2;
+        }
+        else if (n.type === 'CENTER') {
+            ctx.fillStyle = '#000';
+            ctx.strokeStyle = '#fbbf24';
+            ctx.lineWidth = 3;
+        }
+        ctx.fill();
+        ctx.stroke();
+    });
+}
+
+function drawStarIcon(x, y) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.fillStyle = '#fbbf24';
+    ctx.shadowColor = 'rgba(251, 191, 36, 0.5)';
+    ctx.shadowBlur = 10;
+    for(let i=0; i<10; i++) {
+        const r = i%2===0 ? 22 : 11;
+        const a = (i * 36 - 90) * Math.PI/180;
+        ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+    }
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, HOLE_RADIUS, 0, Math.PI*2);
+    ctx.fillStyle = '#1f2937';
+    ctx.shadowBlur = 0;
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawMarbles(ax, ay, am) {
+    gameState.marbles.forEach(m => {
+        if (am && m.id === am.id) return;
+        const n = gameState.nodes[m.nodeId];
+        drawMarble(n.x, n.y, m.player.color.hex);
+    });
+    if (am) drawMarble(ax, ay, am.player.color.hex, true);
+}
+
+function drawMarble(x, y, c, raised) {
+    ctx.beginPath();
+    ctx.arc(x, y, MARBLE_RADIUS, 0, Math.PI*2);
+    const g = ctx.createRadialGradient(x-3, y-3, 2, x, y, MARBLE_RADIUS);
+    g.addColorStop(0, '#fff');
+    g.addColorStop(0.5, c);
+    g.addColorStop(1, '#000');
+    ctx.fillStyle = g;
+    if(raised) {
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 5;
+    }
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+}
+
+function drawHighlights() {
+    if (gameState.phase === 'SELECT' && !gameState.players[gameState.currPlayer].isAI) {
+        const p = gameState.players[gameState.currPlayer];
+        if (Network.isOnline && p.id !== Network.myPlayerIdx) return;
+        
+        gameState.validMoves.forEach(move => {
+            const m = gameState.marbles.find(mb => mb.id === move.marbleId);
+            const n = gameState.nodes[m.nodeId];
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, MARBLE_RADIUS + 4, 0, Math.PI*2);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            if (gameState.selectedMarble && gameState.selectedMarble.id === m.id) {
+                const t = gameState.nodes[move.targetNodeId];
+                ctx.globalAlpha = 0.6;
+                drawMarble(t.x, t.y, m.player.color.hex);
+                ctx.globalAlpha = 1;
+                if (move.type === 'STAR_JUMP') drawLabel(t.x, t.y, 'JUMP');
+                if (move.type === 'ENTER_CENTER') drawLabel(t.x, t.y, 'ENTER');
+                if (move.type === 'EXIT_CENTER') drawLabel(t.x, t.y, 'EXIT');
+            }
+        });
+    }
+}
+
+function drawLabel(x, y, text) {
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 10px Poppins';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, x, y + 25);
+}
+
+// --- Inputs ---
+
+window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+         const p = gameState.players[gameState.currPlayer];
+         if(Network.isOnline && p.id !== Network.myPlayerIdx && !p.isAI) return;
+         
+         if (gameState.phase === 'ROLL' && !p.isAI) {
+             rollDie();
+         }
+    }
+});
+
+// Initialize Inputs and Setup
+Input.init();
+initSetupUI();
+resize();
+window.addEventListener('resize', resize);
+document.getElementById('roll-btn').addEventListener('click', rollDie);
+
+</script>
+</body>
+</html>
