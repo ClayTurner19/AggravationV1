@@ -294,9 +294,8 @@
 
         /* --- MOBILE UI OPTIMIZATIONS --- */
         @media (max-width: 768px) {
-            /* Shrink and tuck the controls */
             #controls {
-                bottom: 10px;
+                bottom: 30px; /* Nudged up above the phone's native UI */
                 right: 10px;
                 padding: 1rem;
                 transform: scale(0.85);
@@ -304,7 +303,6 @@
                 min-width: 120px;
             }
 
-            /* Shrink and tuck the move log */
             #move-log {
                 top: 10px;
                 left: 10px;
@@ -315,7 +313,6 @@
                 padding: 0.75rem;
             }
 
-            /* Tuck the menu button */
             #menu-btn {
                 top: 10px;
                 right: 10px;
@@ -323,20 +320,20 @@
                 font-size: 0.8rem;
             }
 
-            /* Shrink the recenter button */
             #recenter-btn {
-                bottom: 10px;
+                bottom: 30px; /* Nudged up */
                 left: 10px;
                 width: 40px;
                 height: 40px;
                 font-size: 1.2rem;
             }
 
-            /* Ensure the setup menu doesn't overflow the screen */
             #setup-panel {
                 width: 95vw;
                 min-width: 0;
                 padding: 1.5rem;
+                max-height: 85dvh; /* Prevents it from going under the keyboard/navbar */
+                padding-bottom: 2rem;
             }
         }
 
@@ -350,16 +347,17 @@
         <!-- Top UI -->
         <button id="menu-btn" class="hidden" onclick="toggleMenu()">☰ Menu</button>
         <button id="recenter-btn" class="ui-panel hidden cursor-pointer hover:scale-105 transition-transform" onclick="recenterCamera()" title="Recenter Board">🎯</button>
-        <div id="move-log" class="ui-panel hidden flex flex-col">
-            <h3 class="font-bold text-gray-700 text-sm mb-2 border-b pb-2 flex justify-between items-center">
+        <div id="move-log" class="ui-panel hidden flex flex-col transition-all duration-300">
+            <h3 class="font-bold text-gray-700 text-sm mb-2 border-b pb-2 flex justify-between items-center cursor-pointer" onclick="toggleLog()">
                 <span>Game Log & Chat</span>
-                <span class="text-xs text-gray-400 font-normal">Latest top</span>
+                <span id="log-toggle-icon" class="text-xs text-blue-500 font-black hover:text-blue-700 transition-colors">[-] Minimize</span>
             </h3>
-            <div id="log-content" class="flex-grow overflow-y-auto mb-2"></div>
-
-            <div class="flex gap-1 mt-auto border-t pt-2">
-                <input type="text" id="chat-input" class="w-full text-xs p-1 border border-gray-300 rounded focus:outline-none focus:border-blue-500" placeholder="Type a message..." onkeypress="handleChatKey(event)">
-                <button onclick="sendChat()" class="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold hover:bg-blue-600 transition-colors">Send</button>
+            <div id="log-container" class="flex flex-col flex-grow overflow-hidden transition-all duration-300">
+                <div id="log-content" class="flex-grow overflow-y-auto mb-2"></div>
+                <div class="flex gap-1 mt-auto border-t pt-2">
+                    <input type="text" id="chat-input" class="w-full text-xs p-1 border border-gray-300 rounded focus:outline-none focus:border-blue-500" placeholder="Type a message..." onkeypress="handleChatKey(event)">
+                    <button onclick="sendChat()" class="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold hover:bg-blue-600 transition-colors">Send</button>
+                </div>
             </div>
         </div>
 
@@ -389,9 +387,14 @@
 
             <div id="player-config-list" class="mb-6 text-left space-y-2"></div>
 
-            <button onclick="startGame()" id="start-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg transform transition hover:-translate-y-1">
-                Start Game
-            </button>
+            <div id="action-buttons" class="flex gap-2">
+                <button onclick="startGame()" id="start-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg transform transition hover:-translate-y-1">
+                    Start Game
+                </button>
+                <button onclick="showLifetimeStats()" class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg transform transition hover:-translate-y-1" title="Lifetime Stats">
+                    🏆
+                </button>
+            </div>
             <p id="setup-error" class="text-red-500 text-xs mt-2 hidden text-center font-bold">Select at least 2 players.</p>
         </div>
 
@@ -455,6 +458,28 @@
                     </table>
                 </div>
                 <button class="btn px-8" onclick="closeStats()">Close</button>
+            </div>
+        </div>
+
+        <div id="lifetime-overlay" class="overlay hidden">
+            <div class="ui-panel p-6 w-[600px] max-w-[95vw] text-center shadow-2xl">
+                <h2 class="text-3xl font-extrabold mb-4 text-purple-700">Lifetime Hall of Fame</h2>
+                <div class="overflow-y-auto max-h-[60vh] mb-6 border rounded-lg">
+                    <table class="stats-table">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th>Player</th>
+                                <th>Wins</th>
+                                <th>Win %</th>
+                                <th>Kills</th>
+                                <th>Deaths</th>
+                                <th>Games</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lifetime-body" class="bg-white"></tbody>
+                    </table>
+                </div>
+                <button class="btn px-8 w-full" onclick="document.getElementById('lifetime-overlay').classList.add('hidden')">Close Leaderboard</button>
             </div>
         </div>
 
@@ -751,11 +776,40 @@ let scale = 1;
             });
 
             conn.on('close', () => {
-                lobby.forEach(s => {
-                    if (s.peerId === conn.peer) { s.type = 'None'; s.peerId = null; s.name = COLORS[s.colorIdx].name; }
-                });
-                connections = connections.filter(c => c.peer !== conn.peer);
-                broadcastLobby();
+                const slot = lobby.find(s => s.peerId === conn.peer);
+                if (!slot) return;
+
+                // If a game is active, pause it and trigger the grace period
+                if (gameState.phase !== 'SETUP' && gameState.phase !== 'WIN') {
+                    gameState.pausedPhase = gameState.phase;
+                    gameState.phase = 'PAUSED';
+                    clearInterval(gameState.timer);
+                    clearTimeout(gameState.timeoutId);
+                    Network.broadcastGameEvent({ type: 'SYNC_PAUSE' });
+                    updateUI(`Disconnect: Waiting 30s for ${slot.name}...`);
+                }
+
+                // 60-Second Grace Period Timer
+                setTimeout(() => {
+                    // Check if the slot is STILL mapped to the dead connection ID
+                    if (slot.peerId === conn.peer) {
+                        slot.type = 'None'; slot.peerId = null; slot.name = COLORS[slot.colorIdx].name;
+                        connections = connections.filter(c => c.peer !== conn.peer);
+                        broadcastLobby();
+
+                        // If they failed to reconnect, replace them with a Hard CPU so the game can continue
+                        if (gameState.phase === 'PAUSED') {
+                            const p = gameState.players.find(pl => pl.colorIdx === slot.colorIdx);
+                            if (p) {
+                                p.isAI = true;
+                                p.aiDifficulty = 'hard';
+                                slot.type = 'CPU (Hard)';
+                                updateUI(`${p.name} abandoned! CPU took over.`);
+                                setTimeout(toggleMenu, 3000); // Auto-resume the game after 3 seconds
+                            }
+                        }
+                    }
+                }, 30000);
             });
         }
 
@@ -870,6 +924,54 @@ let scale = 1;
         }, 2000);
     }
 
+    function showLifetimeStats() {
+        document.getElementById('lifetime-overlay').classList.remove('hidden');
+        const tbody = document.getElementById('lifetime-body');
+        tbody.innerHTML = '';
+
+        const lifetime = JSON.parse(localStorage.getItem('aggravation_lifetime_stats')) || {};
+
+        // Convert object to array and sort by Wins (highest first)
+        const players = Object.keys(lifetime).map(name => ({ name, ...lifetime[name] }));
+        players.sort((a, b) => b.wins - a.wins);
+
+        if (players.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500 py-8 font-bold">No games played yet!</td></tr>';
+            return;
+        }
+
+        players.forEach(p => {
+            const winPct = p.gamesPlayed > 0 ? Math.round((p.wins / p.gamesPlayed) * 100) + '%' : '0%';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+            <td class="font-bold text-gray-800">${p.name}</td>
+            <td class="text-green-600 font-bold">${p.wins}</td>
+            <td class="text-purple-600 font-bold">${winPct}</td>
+            <td class="text-red-500 font-bold">${p.kills}</td>
+            <td class="text-gray-600">${p.deaths}</td>
+            <td class="text-gray-500">${p.gamesPlayed}</td>
+        `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function toggleLog() {
+        const container = document.getElementById('log-container');
+        const icon = document.getElementById('log-toggle-icon');
+        if (container.classList.contains('hidden')) {
+            container.classList.remove('hidden');
+            icon.innerText = '[-] Minimize';
+        } else {
+            container.classList.add('hidden');
+            icon.innerText = '[+] Expand';
+        }
+    }
+
+    // Ask for notification permissions when the page loads
+    if ("Notification" in window && Notification.permission !== "denied") {
+        Notification.requestPermission();
+    }
+
     // --- Setup UI & Lobby Logic ---
 
     function updateLobbySlot(idx, field, value) {
@@ -915,7 +1017,7 @@ let scale = 1;
                 btn.className = "w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg mb-4";
                 btn.innerText = "Resume Saved Game";
                 btn.onclick = resumeGame;
-                container.parentElement.insertBefore(btn, document.getElementById('start-btn'));
+                container.parentElement.insertBefore(btn, document.getElementById('action-buttons'));
             }
         } else if (existingResumeBtn) {
             existingResumeBtn.remove();
@@ -1854,10 +1956,10 @@ function executeMove(move, fromNetwork = false) {
 
     const animate = () => {
         if (gameState.phase === 'PAUSED') {
-            requestAnimationFrame(animate); 
+            requestAnimationFrame(animate);
             return;
         }
-        progress += speed; 
+        progress += speed;
         if (progress >= 1) {
             progress = 0;
             currentStep++;
@@ -1867,9 +1969,14 @@ function executeMove(move, fromNetwork = false) {
             }
         }
         const n1 = gameState.nodes[pathIds[currentStep]];
-        const n2 = gameState.nodes[pathIds[currentStep+1]];
+        const n2 = gameState.nodes[pathIds[currentStep + 1]];
         const cx = n1.x + (n2.x - n1.x) * progress;
-        const cy = n1.y + (n2.y - n1.y) * progress;
+
+        // --- NEW: The Hop Arc Math ---
+        // Sine wave creates a smooth curve that peaks at 50% progress (height of 25px)
+        const hopArc = Math.sin(progress * Math.PI) * 25;
+        const cy = n1.y + (n2.y - n1.y) * progress - hopArc;
+
         draw(cx, cy, marble);
         gameState.animationFrameId = requestAnimationFrame(animate);
     };
@@ -1882,6 +1989,7 @@ function finishMove(move, marble) {
     const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.id !== marble.id);
     if (victim) {
         Sound.aggravate();
+        gameState.shakeFrames = 15; // --- NEW: Trigger 15 frames of camera shake
         marble.player.stats.kills++;
         victim.player.stats.deaths++;
         const emptyBase = victim.player.baseNodes.find(bid => !gameState.marbles.some(m => m.nodeId === bid));
@@ -1894,6 +2002,19 @@ function finishMove(move, marble) {
         launchConfetti();
         gameState.phase = 'WIN';
         gameState.finishedPlayers.push(marble.player);
+        // --- NEW: Save Lifetime Stats ---
+        let lifetime = JSON.parse(localStorage.getItem('aggravation_lifetime_stats')) || {};
+        gameState.players.forEach(p => {
+            if (!p.isAI) {
+                if (!lifetime[p.name]) lifetime[p.name] = { wins: 0, kills: 0, deaths: 0, gamesPlayed: 0 };
+                lifetime[p.name].gamesPlayed++;
+                lifetime[p.name].kills += p.stats.kills;
+                lifetime[p.name].deaths += p.stats.deaths;
+                if (p.id === marble.player.id) lifetime[p.name].wins++; // If this player is the winner
+            }
+        });
+        localStorage.setItem('aggravation_lifetime_stats', JSON.stringify(lifetime));
+        console.log("Lifetime Stats Updated:", lifetime); // Check your browser console to see it working!
         document.getElementById('winner-name').innerText = marble.player.name;
         document.getElementById('victory-overlay').classList.remove('hidden');
         
@@ -1988,8 +2109,20 @@ function endTurn() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.save();
 
-        // Apply camera pan and zoom
-        ctx.translate(canvas.width / 2 + camera.x, canvas.height / 2 + camera.y);
+        // --- NEW: Camera Shake Math ---
+        let sx = 0, sy = 0;
+        if (gameState.shakeFrames > 0) {
+            sx = (Math.random() - 0.5) * 15;
+            sy = (Math.random() - 0.5) * 15;
+            gameState.shakeFrames--;
+            // If the animation is over but we still need to shake, force the loop
+            if (gameState.shakeFrames > 0 && !gameState.animating) {
+                requestAnimationFrame(() => draw());
+            }
+        }
+
+        // Apply camera pan, zoom, and shake
+        ctx.translate(canvas.width / 2 + camera.x + sx, canvas.height / 2 + camera.y + sy);
         ctx.scale(scale * camera.zoom, scale * camera.zoom);
 
         drawBoardBackground();
@@ -2119,22 +2252,24 @@ function endTurn() {
         ctx.beginPath();
         ctx.arc(x, y, MARBLE_RADIUS, 0, Math.PI * 2);
 
-        // 3D Glass Sphere Effect (Specular Highlight)
+        // 3D Glass Sphere Effect
         const g = ctx.createRadialGradient(x - 3, y - 3, 1, x, y, MARBLE_RADIUS);
-        g.addColorStop(0, '#ffffff'); // Bright reflection of the "light source"
-        g.addColorStop(0.3, c);       // True color
-        g.addColorStop(1, '#000000'); // Shadowed bottom edge
+        g.addColorStop(0, '#ffffff');
+        g.addColorStop(0.3, c);
+        g.addColorStop(1, '#000000');
         ctx.fillStyle = g;
 
-        // Dynamic Drop Shadows
-        ctx.shadowColor = 'rgba(0,0,0,0.6)';
-        ctx.shadowBlur = raised ? 12 : 4;
-        ctx.shadowOffsetY = raised ? 8 : 2;
-        ctx.shadowOffsetX = raised ? 4 : 1;
+        // FIX: Only draw expensive shadows if the board is completely still
+        if (!gameState.animating && !gameState.shakeFrames) {
+            ctx.shadowColor = 'rgba(0,0,0,0.6)';
+            ctx.shadowBlur = raised ? 12 : 4;
+            ctx.shadowOffsetY = raised ? 8 : 2;
+            ctx.shadowOffsetX = raised ? 4 : 1;
+        }
 
         ctx.fill();
 
-        // Reset shadows so they don't bleed into other drawings
+        // Reset shadows
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
@@ -2335,6 +2470,13 @@ function endTurn() {
 
         // Determine if it is the local user's turn
         const isMyTurn = (Network.isHost() && p.peerId === 'host') || (!Network.isHost() && p.peerId === Network.getMyId());
+
+        // --- NEW: Turn Notification ---
+        if (isMyTurn && !p.isAI && document.hidden) {
+            if ("Notification" in window && Notification.permission === "granted") {
+                new Notification("Your Turn!", { body: "It is your turn to roll in Aggravation." });
+            }
+        }
 
         if (msg) {
             msgEl.innerText = msg;
