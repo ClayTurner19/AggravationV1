@@ -1519,134 +1519,159 @@ function playerPass(fromNetwork = false) {
     addLog(p, "Passed Turn", gameState.die);
     endTurn();
 }
+function executeAIMove() {
+    if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
 
-    function executeAIMove() {
-        if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
+    let bestMove = null;
+    let bestScore = -Infinity;
+    const p = gameState.players[gameState.currPlayer];
+    const isHard = p.aiDifficulty === 'hard' || !p.isAI;
+    const exitStarIdx = (p.colorIdx + 5) % 6;
+    const exitStarNode = gameState.nodes.find(n => n.type === 'STAR' && n.sector === exitStarIdx);
 
-        let bestMove = null;
-        let bestScore = -Infinity;
-        const p = gameState.players[gameState.currPlayer];
-        const isHard = p.aiDifficulty === 'hard' || !p.isAI;
-        const exitStarIdx = (p.colorIdx + 5) % 6;
-        const exitStarNode = gameState.nodes.find(n => n.type === 'STAR' && n.sector === exitStarIdx);
+    let myMarblesInBase = 0;
+    let highestOpponentProgress = 0;
 
-        // --- PRE-CALCULATE GAME STATE ---
-        let myMarblesInBase = 0;
-        let highestOpponentProgress = 0;
+    if (isHard) {
+        myMarblesInBase = gameState.marbles.filter(m => m.player.id === p.id && gameState.nodes[m.nodeId].type === 'BASE').length;
+        gameState.players.forEach(opp => {
+            if (opp.id === p.id) return;
+            let oppHome = gameState.marbles.filter(m => m.player.id === opp.id && opp.homeNodes.includes(m.nodeId)).length;
+            if (oppHome > highestOpponentProgress) highestOpponentProgress = oppHome;
+        });
+    }
 
-        if (isHard) {
-            myMarblesInBase = gameState.marbles.filter(m => m.player.id === p.id && gameState.nodes[m.nodeId].type === 'BASE').length;
-            gameState.players.forEach(opp => {
-                if (opp.id === p.id) return;
-                let oppHome = gameState.marbles.filter(m => m.player.id === opp.id && opp.homeNodes.includes(m.nodeId)).length;
-                if (oppHome > highestOpponentProgress) highestOpponentProgress = oppHome;
-            });
+    gameState.validMoves.forEach(move => {
+        let score = Math.random() * 5; // Slight randomization to break ties
+        const marble = gameState.marbles.find(m => m.id === move.marbleId);
+        const currentNode = gameState.nodes[marble.nodeId];
+        const target = gameState.nodes[move.targetNodeId];
+        const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.player.id !== p.id);
+
+        // --- SHARED LOGIC ---
+        let isOvershoot = false;
+        if (move.path.includes(p.homeEntryNode) && target.type !== 'HOME') isOvershoot = true;
+        if (move.type === 'STAR_JUMP' && currentNode.id === exitStarNode.id) isOvershoot = true;
+
+        const pseudoTarget = { nodeId: move.targetNodeId, player: p };
+        let progressDelta = getMarbleProgress(pseudoTarget) - getMarbleProgress(marble);
+
+        // ==========================================
+        // NORMAL DIFFICULTY (Casual, human-like)
+        // ==========================================
+        if (!isHard) {
+            // Prefers moving pieces that are further along, AND actually rewards moving forward
+            score += (getMarbleProgress(marble) * 1.5) + (progressDelta * 2.5); 
+            
+            if (move.type === 'START') score += 2000; // Get out of base
+            if (currentNode.id === p.startNode && move.type !== 'START') score += 1000; // Clear the spawn
+            if (victim) score += 500; // Take obvious kills
+            if (target.type === 'HOME') score += 1500; // Score when possible
+            
+            // STAR PATH LOGIC (The Fix)
+            if (move.type === 'STAR_JUMP') score += 800; // Keep riding the stars
+            if (currentNode.type === 'STAR' && target.type === 'MAIN' && target.sector !== p.colorIdx) {
+                score -= 2500; // Huge penalty for getting off the star into enemy territory
+            }
+            
+            if (move.type === 'ENTER_CENTER') score += 800;
+            if (move.type === 'EXIT_CENTER' && target.id === exitStarNode.id) score += 1500;
+            
+            if (isOvershoot) score -= 3000;
         }
 
-        gameState.validMoves.forEach(move => {
-            let score = Math.random() * 5;
-            const marble = gameState.marbles.find(m => m.id === move.marbleId);
-            const currentNode = gameState.nodes[marble.nodeId];
-            const target = gameState.nodes[move.targetNodeId];
-            const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.player.id !== p.id);
+        // ==========================================
+        // HARD DIFFICULTY (Ruthless, strategic)
+        // ==========================================
+        if (isHard) {
+            // A. BASE EXIT & START NODE CLEARING
+            if (move.type === 'START') score += 8000;
+            if (currentNode.id === p.startNode && move.type !== 'START') score += 2000; 
 
-            // --- 1. NORMAL AI CASUAL LOGIC ---
-            if (!isHard) {
-                // Casual players just like moving their furthest piece, exiting base, and taking obvious kills
-                score += getMarbleProgress(marble) * 1.5;
-                if (move.type === 'START') score += 2000;
-                if (victim) score += 300;
-                if (target.type === 'HOME') score += 1000;
+            // B. HOME PROGRESSION
+            if (target.type === 'HOME') score += 5000 + (target.step * 200);
+
+            // C. PATH ANALYSIS
+            const passedExitStar = move.path.includes(exitStarNode.id);
+            if (passedExitStar) {
+                if (target.type === 'STAR' && target.id !== exitStarNode.id) score -= 20000;
+                else if (target.sector === p.colorIdx && target.type === 'MAIN') score += 3000;
             }
 
-            // --- 2. HARD AI RUTHLESS LOGIC ---
-            if (isHard) {
-                // A. BASE EXIT PRIORITY (Never waste a 1 or 6 if you are trapped)
-                if (move.type === 'START') score += 8000;
+            // D. DYNAMIC KILL BOUNTY
+            if (victim) {
+                let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
+                let myProgress = getMarbleProgress(marble);
+                let victimProgress = getMarbleProgress(victim);
 
-                // B. HOME PROGRESSION
-                if (target.type === 'HOME') score += 5000 + (target.step * 100);
+                if (victimHomeCount >= 2 && victimProgress > 50) score += 6000; // High-priority assassination!
+                else if (myProgress > 85) score += 10; // Ignore kills if we are inches from the finish line
+                else score += 800 + (victimProgress * 15); 
+            }
 
-                // C. PATH ANALYSIS (Preventing Star Loops)
-                const passedExitStar = move.path.includes(exitStarNode.id);
-                if (passedExitStar) {
-                    if (target.type === 'STAR' && target.id !== exitStarNode.id) score -= 20000;
-                    else if (target.sector === p.colorIdx && target.type === 'MAIN') score += 3000;
+            // E. CENTER HOLE STRATEGY
+            if (move.type === 'ENTER_CENTER') {
+                score += 2500;
+                if (victim) score += 3000; // God-tier kill
+            }
+            if (move.type === 'EXIT_CENTER') {
+                if (target.id === exitStarNode.id) score += 5000; 
+                else score += 1000;
+            }
+
+            // F. STAR JUMPS
+            if (target.type === 'STAR' && currentNode.type !== 'STAR') score += 1000;
+
+            // G. FORWARD MOMENTUM
+            score += (progressDelta * 4);
+
+            // H. DISTANCE-BASED DEFENSIVE AWARENESS
+            let currentDanger = 0;
+            let futureDanger = 0;
+            gameState.marbles.forEach(oppM => {
+                if (oppM.player.id === p.id || gameState.nodes[oppM.nodeId].type === 'BASE') return;
+                let oppProg = getMarbleProgress(oppM);
+                
+                let myCurrentProg = getMarbleProgress(marble);
+                let currentDist = myCurrentProg - oppProg;
+                // If an enemy is right behind us, panic!
+                if (currentDist > 0 && currentDist <= 6 && currentNode.type === 'MAIN') {
+                    currentDanger += 1000 + ((7 - currentDist) * 150); 
                 }
 
-                // D. KILL vs. RACE LOGIC
+                let myFutureProg = getMarbleProgress(pseudoTarget);
+                let futureDist = myFutureProg - oppProg;
+                // If a move lands us right in front of an enemy, hesitate!
+                if (futureDist > 0 && futureDist <= 6 && target.type === 'MAIN') {
+                    futureDanger += 1000 + ((7 - futureDist) * 150); 
+                }
+            });
+            score += (currentDanger - futureDanger);
+
+            // I. OVERSHOOT & ASSASSINATION PENALTIES
+            if (isOvershoot) {
+                let overshootScore = -15000;
                 if (victim) {
                     let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
-                    let myProgress = getMarbleProgress(marble);
-
-                    if (victimHomeCount >= 2) score += 2000; // Extremely High threat!
-                    else if (myProgress > 75) score += 10; // Ignore kills when about to score
-                    else score += 300 + (getMarbleProgress(victim) * 3); // Standard scaled bounty
+                    let myHomeCount = gameState.marbles.filter(m => m.player.id === p.id && p.homeNodes.includes(m.nodeId)).length;
+                    // It's worth missing our home entrance if it stops a player from winning the game
+                    if (victimHomeCount >= 2 && myHomeCount < 3) overshootScore = 20000;
+                    else if (getMarbleProgress(victim) > 60) overshootScore = 8000; 
                 }
-
-                // E. CENTER HOLE STRATEGY
-                if (move.type === 'ENTER_CENTER') {
-                    if (myMarblesInBase === 0 && getMarbleProgress(marble) < 60) score += 1200;
-                    else score -= 800;
-                }
-                if (move.type === 'EXIT_CENTER') {
-                    if (target.id === exitStarNode.id) score += 1500;
-                    else score -= 500;
-                }
-
-                // F. STAR JUMPS
-                if (target.type === 'STAR' && currentNode.type !== 'STAR') score += 400;
-
-                // G. FORWARD MOMENTUM
-                const pseudoTarget = { nodeId: move.targetNodeId, player: p };
-                let progressDelta = getMarbleProgress(pseudoTarget) - getMarbleProgress(marble);
-                score += (progressDelta * 2.5);
-
-                // H. DEFENSIVE AWARENESS (Risk & Survival)
-                let currentDanger = 0;
-                let futureDanger = 0;
-                gameState.marbles.forEach(oppM => {
-                    if (oppM.player.id === p.id || gameState.nodes[oppM.nodeId].type === 'BASE') return;
-                    let oppProg = getMarbleProgress(oppM);
-
-                    // Are we currently being hunted?
-                    let myCurrentProg = getMarbleProgress(marble);
-                    let currentDist = myCurrentProg - oppProg;
-                    if (currentDist > 0 && currentDist <= 6 && currentNode.type === 'MAIN') currentDanger += 1500; // We are in the crosshairs! Move!
-
-                    // Will we land in front of someone?
-                    let myFutureProg = getMarbleProgress(pseudoTarget);
-                    let futureDist = myFutureProg - oppProg;
-                    if (futureDist > 0 && futureDist <= 6 && target.type === 'MAIN') futureDanger += 1200; // Landing here is risky!
-                });
-                score += (currentDanger - futureDanger);
-
-                // I. OVERSHOOT & ASSASSINATION
-                let isOvershoot = false;
-                if (move.path.includes(p.homeEntryNode) && target.type !== 'HOME') isOvershoot = true;
-                if (move.type === 'STAR_JUMP' && currentNode.id === exitStarNode.id) isOvershoot = true;
-
-                if (isOvershoot) {
-                    let overshootScore = -15000;
-                    if (victim) {
-                        let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
-                        let myHomeCount = gameState.marbles.filter(m => m.player.id === p.id && p.homeNodes.includes(m.nodeId)).length;
-                        if (victimHomeCount >= 2 && myHomeCount < 3) overshootScore = 20000;
-                    }
-                    score += overshootScore;
-                }
+                score += overshootScore;
             }
+        }
 
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove = move;
-            }
-        });
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    });
 
-        // If the best available move is heavily penalized, just pass the turn.
-        if (bestMove && bestScore > -5000) executeMove(bestMove);
-        else playerPass();
-    }
+    // Fallback: If all moves are terribly penalized, just pass
+    if (bestMove && bestScore > -5000) executeMove(bestMove);
+    else playerPass();
+}
 
 function isSafe(targetId, player) {
     const occupant = gameState.marbles.find(m => m.nodeId === targetId);
@@ -1659,18 +1684,19 @@ function getDestinations(startNodeId, steps, player) {
     function traverse(currId, remaining, mode, pathSoFar) {
         const newPath = [...pathSoFar, currId];
         const node = gameState.nodes[currId];
+        
         if (remaining === 0) {
             dests.push({ id: currId, type: mode, path: newPath });
             return;
         }
         
-        if (node.type === 'STAR' && remaining === 1 && steps === 1) { 
+        // FIXED: Only allow entering the center if we are moving normally.
+        // This prevents entering the center at the end of a Star Jump sequence.
+        if (node.type === 'STAR' && remaining === 1 && mode === 'NORMAL') {
              const centerNode = gameState.nodes.find(n => n.type === 'CENTER');
-             if (isSafe(centerNode.id, player)) dests.push({ id: centerNode.id, type: 'ENTER_CENTER', path: [...newPath, centerNode.id] });
-        }
-        if (node.type === 'STAR' && remaining === 1 && steps !== 1) { 
-             const centerNode = gameState.nodes.find(n => n.type === 'CENTER');
-             if (isSafe(centerNode.id, player)) dests.push({ id: centerNode.id, type: 'ENTER_CENTER', path: [...newPath, centerNode.id] });
+             if (isSafe(centerNode.id, player)) {
+                 dests.push({ id: centerNode.id, type: 'ENTER_CENTER', path: [...newPath, centerNode.id] });
+             }
         }
 
         if (node.type === 'STAR' && (mode === 'STAR_JUMP' || remaining === steps)) {
@@ -1682,11 +1708,13 @@ function getDestinations(startNodeId, steps, player) {
                  if (!blocked) traverse(nextStar.id, remaining - 1, 'STAR_JUMP', newPath);
              }
         }
+        
         if (mode !== 'STAR_JUMP' || node.type === 'STAR') {
             const isBlocked = (nid) => {
                 const occ = gameState.marbles.find(m => m.nodeId === nid);
                 return occ && occ.player.id === player.id;
             };
+            
             if (currId === player.homeEntryNode) {
                 if (player.homeNodes.length > 0) {
                      const nid = player.homeNodes[0];
@@ -1706,15 +1734,18 @@ function getDestinations(startNodeId, steps, player) {
             }
         }
     }
+    
     const startNode = gameState.nodes[startNodeId];
     traverse(startNodeId, steps, 'NORMAL', []); 
     if (startNode.type === 'STAR') traverse(startNodeId, steps, 'STAR_JUMP', []);
+    
     const unique = [];
     const map = new Set();
     dests.forEach(d => {
         const key = d.id + '-' + d.type;
         if(!map.has(key)) { map.add(key); unique.push(d); }
     });
+    
     return unique;
 }
 
