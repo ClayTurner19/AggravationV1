@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aggravation - Digital Board Game</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script> ```
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap');
 
@@ -301,12 +301,17 @@
         <!-- Top UI -->
         <button id="menu-btn" class="hidden" onclick="toggleMenu()">☰ Menu</button>
         <button id="recenter-btn" class="ui-panel hidden cursor-pointer hover:scale-105 transition-transform" onclick="recenterCamera()" title="Recenter Board">🎯</button>
-        <div id="move-log" class="ui-panel hidden">
+        <div id="move-log" class="ui-panel hidden flex flex-col">
             <h3 class="font-bold text-gray-700 text-sm mb-2 border-b pb-2 flex justify-between items-center">
-                <span>Game Log</span>
+                <span>Game Log & Chat</span>
                 <span class="text-xs text-gray-400 font-normal">Latest top</span>
             </h3>
-            <div id="log-content"></div>
+            <div id="log-content" class="flex-grow overflow-y-auto mb-2"></div>
+
+            <div class="flex gap-1 mt-auto border-t pt-2">
+                <input type="text" id="chat-input" class="w-full text-xs p-1 border border-gray-300 rounded focus:outline-none focus:border-blue-500" placeholder="Type a message..." onkeypress="handleChatKey(event)">
+                <button onclick="sendChat()" class="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold hover:bg-blue-600 transition-colors">Send</button>
+            </div>
         </div>
 
         <!-- Setup Panel -->
@@ -619,10 +624,51 @@ let scale = 1;
 
         function setupHostConnection(conn) {
             conn.on('open', () => {
-                conn.send({ type: 'LOBBY_SYNC', lobby, speed: document.getElementById('setup-speed').value });
+                if (gameState.phase !== 'SETUP' && gameState.phase !== 'WIN') {
+                    const activePeerIds = connections.map(c => c.peer);
+                    activePeerIds.push('host');
+
+                    const droppedPlayer = gameState.players.find(p => !p.isAI && p.peerId !== 'host' && !activePeerIds.includes(p.peerId));
+
+                    if (droppedPlayer) {
+                        droppedPlayer.peerId = conn.peer;
+                        lobby[droppedPlayer.colorIdx].peerId = conn.peer;
+
+                        const sysMsg = { senderName: 'System', senderColor: '#9ca3af', msg: `${droppedPlayer.name} reconnected!` };
+                        receiveChat(sysMsg);
+                        connections.forEach(c => c.send({ type: 'SYNC_CHAT', chat: sysMsg }));
+
+                        connections.forEach(c => {
+                            if (c.peer !== conn.peer) {
+                                c.send({ type: 'SYNC_PEER_UPDATE', colorIdx: droppedPlayer.colorIdx, newPeerId: conn.peer });
+                            }
+                        });
+                    }
+
+                    // Define liveState before sending it
+                    const liveState = {
+                        config: gameState.players.map(p => ({
+                            colorIdx: p.colorIdx,
+                            type: p.isAI ? (p.aiDifficulty === 'hard' ? 'CPU (Hard)' : 'CPU (Normal)') : 'Human',
+                            difficulty: p.aiDifficulty,
+                            name: p.name,
+                            peerId: p.peerId
+                        })),
+                        currPlayer: gameState.currPlayer,
+                        phase: gameState.phase,
+                        marbles: gameState.marbles.map(m => ({ id: m.id, nodeId: m.nodeId })),
+                        stats: gameState.players.map(p => p.stats),
+                        speed: gameState.config.speed,
+                        logs: gameState.logs
+                    };
+
+                    conn.send({ type: 'SYNC_RESTORE', backup: liveState });
+                } else {
+                    conn.send({ type: 'LOBBY_SYNC', lobby, speed: document.getElementById('setup-speed').value });
+                }
             });
+
             conn.on('data', (data) => {
-                // --- LOBBY LOGIC ---
                 if (data.type === 'CLAIM_SLOT') {
                     let slot = lobby[data.slotIdx];
                     if (slot.type === 'None' || slot.type.includes('CPU')) {
@@ -641,7 +687,6 @@ let scale = 1;
                         slot.name = data.name; broadcastLobby();
                     }
                 }
-                // --- GAMEPLAY INTERCEPTS ---
                 else if (data.type === 'REQUEST_ROLL') {
                     if (gameState.players[gameState.currPlayer].peerId === conn.peer) rollDie();
                 } else if (data.type === 'REQUEST_MOVE') {
@@ -650,8 +695,12 @@ let scale = 1;
                     if (gameState.players[gameState.currPlayer].peerId === conn.peer) playerPass();
                 } else if (data.type === 'REQUEST_CONTINUE') {
                     continueGame();
+                } else if (data.type === 'REQUEST_CHAT') {
+                    receiveChat(data.chat);
+                    connections.forEach(c => c.send({ type: 'SYNC_CHAT', chat: data.chat }));
                 }
             });
+
             conn.on('close', () => {
                 lobby.forEach(s => {
                     if (s.peerId === conn.peer) { s.type = 'None'; s.peerId = null; s.name = COLORS[s.colorIdx].name; }
@@ -678,6 +727,13 @@ let scale = 1;
                     document.getElementById('setup-speed').value = data.speed;
                     document.getElementById('menu-speed').value = data.speed;
                     initGame(data.config);
+                } else if (data.type === 'SYNC_CHAT') {
+                    receiveChat(data.chat);
+                }
+                // --- QUIET ID UPDATES ---
+                else if (data.type === 'SYNC_PEER_UPDATE') {
+                    const p = gameState.players.find(pl => pl.colorIdx === data.colorIdx);
+                    if (p) p.peerId = data.newPeerId;
                 }
                 // --- GAMEPLAY SYNCS ---
                 else if (data.type === 'SYNC_ROLL') {
@@ -1143,6 +1199,50 @@ function addLog(player, text, roll) {
     container.innerHTML = gameState.logs.map(l => `<div class="log-entry">${l.html}</div>`).join('');
 }
 
+function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    
+    // Figure out who is sending the message
+    let senderName = "Spectator";
+    let senderColor = "#6b7280"; 
+    
+    const myPlayer = gameState.players.find(p => (Network.isHost() && p.peerId === 'host') || (!Network.isHost() && p.peerId === Network.getMyId()));
+    
+    if (myPlayer) {
+        senderName = myPlayer.name;
+        senderColor = myPlayer.color.hex;
+    } else if (Network.isHost()) {
+        senderName = "Host";
+    }
+
+    const chatData = { senderName, senderColor, msg };
+
+    if (Network.isHost()) {
+        receiveChat(chatData);
+        Network.broadcastGameEvent({ type: 'SYNC_CHAT', chat: chatData });
+    } else {
+        Network.sendToHost({ type: 'REQUEST_CHAT', chat: chatData });
+    }
+    
+    input.value = '';
+}
+
+function handleChatKey(e) {
+    if (e.key === 'Enter') sendChat();
+}
+
+function receiveChat(chat) {
+    const nameSpan = `<span style="color:${chat.senderColor}">${chat.senderName}</span>`;
+    // We style chat messages slightly differently than system logs so they stand out
+    gameState.logs.unshift({ html: `<div class="log-header">${nameSpan} <span class="text-xs text-gray-400 font-normal">says:</span></div><div class="log-detail font-medium text-gray-800">${chat.msg}</div>` });
+    
+    if(gameState.logs.length > 50) gameState.logs.pop();
+    const container = document.getElementById('log-content');
+    container.innerHTML = gameState.logs.map(l => `<div class="log-entry">${l.html}</div>`).join('');
+}
+
 // --- Hot-Save & Recovery ---
 function saveGameState() {
     if (gameState.phase === 'SETUP' || gameState.phase === 'WIN') return;
@@ -1426,19 +1526,16 @@ function playerPass(fromNetwork = false) {
         let bestMove = null;
         let bestScore = -Infinity;
         const p = gameState.players[gameState.currPlayer];
-        // If a human times out, we use the best logic to play for them
         const isHard = p.aiDifficulty === 'hard' || !p.isAI;
-
         const exitStarIdx = (p.colorIdx + 5) % 6;
         const exitStarNode = gameState.nodes.find(n => n.type === 'STAR' && n.sector === exitStarIdx);
 
-        // --- PRE-CALCULATE GAME STATE FOR HARD AI ---
+        // --- PRE-CALCULATE GAME STATE ---
         let myMarblesInBase = 0;
         let highestOpponentProgress = 0;
 
         if (isHard) {
             myMarblesInBase = gameState.marbles.filter(m => m.player.id === p.id && gameState.nodes[m.nodeId].type === 'BASE').length;
-
             gameState.players.forEach(opp => {
                 if (opp.id === p.id) return;
                 let oppHome = gameState.marbles.filter(m => m.player.id === opp.id && opp.homeNodes.includes(m.nodeId)).length;
@@ -1447,115 +1544,108 @@ function playerPass(fromNetwork = false) {
         }
 
         gameState.validMoves.forEach(move => {
-            let score = Math.random() * 5; // Base tie-breaker
+            let score = Math.random() * 5;
             const marble = gameState.marbles.find(m => m.id === move.marbleId);
             const currentNode = gameState.nodes[marble.nodeId];
             const target = gameState.nodes[move.targetNodeId];
             const victim = gameState.marbles.find(m => m.nodeId === move.targetNodeId && m.player.id !== p.id);
 
-            // 1. HOME PROGRESSION (Always good, but scaled by difficulty)
-            if (target.type === 'HOME') {
-                score += 5000;
-                if (isHard) {
-                    // Moving a marble deeper into home clears traffic for others
-                    score += (target.step * 100);
-                }
+            // --- 1. NORMAL AI CASUAL LOGIC ---
+            if (!isHard) {
+                // Casual players just like moving their furthest piece, exiting base, and taking obvious kills
+                score += getMarbleProgress(marble) * 1.5;
+                if (move.type === 'START') score += 2000;
+                if (victim) score += 300;
+                if (target.type === 'HOME') score += 1000;
             }
 
-            // 2. PATH ANALYSIS (Preventing Star Loops)
-            const passedExitStar = move.path.includes(exitStarNode.id);
-            if (passedExitStar) {
-                if (target.type === 'STAR' && target.id !== exitStarNode.id) {
-                    score -= 20000; // NEVER loop past the exit star
-                } else if (target.sector === p.colorIdx && target.type === 'MAIN') {
-                    score += 3000; // Entered the home stretch!
+            // --- 2. HARD AI RUTHLESS LOGIC ---
+            if (isHard) {
+                // A. BASE EXIT PRIORITY (Never waste a 1 or 6 if you are trapped)
+                if (move.type === 'START') score += 8000;
+
+                // B. HOME PROGRESSION
+                if (target.type === 'HOME') score += 5000 + (target.step * 100);
+
+                // C. PATH ANALYSIS (Preventing Star Loops)
+                const passedExitStar = move.path.includes(exitStarNode.id);
+                if (passedExitStar) {
+                    if (target.type === 'STAR' && target.id !== exitStarNode.id) score -= 20000;
+                    else if (target.sector === p.colorIdx && target.type === 'MAIN') score += 3000;
                 }
-            }
 
-            // 3. KILL vs. RACE LOGIC
-            if (victim) {
-                let killVal = 50; // Normal AI baseline kill value
-
-                if (isHard) {
+                // D. KILL vs. RACE LOGIC
+                if (victim) {
                     let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
                     let myProgress = getMarbleProgress(marble);
 
-                    if (victimHomeCount >= 2) {
-                        killVal = 1000; // High threat!
-                    } else if (myProgress > 70) {
-                        killVal = 10; // We are close to home, ignore the low-threat kill and focus on winning
-                    } else {
-                        killVal = 200 + (getMarbleProgress(victim) * 2); // Standard scaling bounty
-                    }
-                } else {
-                    // Normal AI just likes kills if they are convenient
-                    killVal = 150;
+                    if (victimHomeCount >= 2) score += 2000; // Extremely High threat!
+                    else if (myProgress > 75) score += 10; // Ignore kills when about to score
+                    else score += 300 + (getMarbleProgress(victim) * 3); // Standard scaled bounty
                 }
-                score += killVal;
-            }
 
-            // 4. ROLL UTILITY & THE CENTER HOLE
-            if (move.type === 'START') {
-                score += isHard ? 600 : 200; // Hard AI prioritizes getting pieces in play heavily
-            }
-
-            if (move.type === 'ENTER_CENTER') {
-                if (isHard) {
-                    if (myMarblesInBase === 0 && getMarbleProgress(marble) < 60) {
-                        // We have no pieces in base, meaning a 1 is a weak roll. 
-                        // Entering the center here gives us a high-value outlet for a future 1.
-                        score += 800;
-                    } else {
-                        // If we have pieces in base, we need 1s to get them out. Don't crowd the center.
-                        score -= 500;
-                    }
-                } else {
-                    // Normal AI avoids the math and avoids the center
-                    score -= 500;
+                // E. CENTER HOLE STRATEGY
+                if (move.type === 'ENTER_CENTER') {
+                    if (myMarblesInBase === 0 && getMarbleProgress(marble) < 60) score += 1200;
+                    else score -= 800;
                 }
-            }
-
-            if (move.type === 'EXIT_CENTER') {
-                if (target.id === exitStarNode.id) score += 1000; // Perfect exit
-                else score -= 100; // Bad exit
-            }
-
-            // 5. STAR JUMPS (General efficiency)
-            if (target.type === 'STAR' && currentNode.type !== 'STAR') score += 250;
-
-            // --- OVERSHOOT & ASSASSINATION LOGIC ---
-            let isOvershoot = false;
-            if (move.path.includes(p.homeEntryNode) && target.type !== 'HOME') isOvershoot = true;
-            if (move.type === 'STAR_JUMP' && currentNode.id === exitStarNode.id) isOvershoot = true;
-
-            if (isOvershoot) {
-                let overshootScore = -10000; // Default: Missing your house is a terrible idea
-
-                if (victim && isHard) {
-                    let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
-                    let myHomeCount = gameState.marbles.filter(m => m.player.id === p.id && p.homeNodes.includes(m.nodeId)).length;
-
-                    // The Assassination Exception: They are a threat, and we aren't about to win ourselves
-                    if (victimHomeCount >= 2 && myHomeCount < 3) {
-                        overshootScore = 15000; // Brilliant strategic play! Abandon the house and go get them!
-                    }
+                if (move.type === 'EXIT_CENTER') {
+                    if (target.id === exitStarNode.id) score += 1500;
+                    else score -= 500;
                 }
-                score += overshootScore;
+
+                // F. STAR JUMPS
+                if (target.type === 'STAR' && currentNode.type !== 'STAR') score += 400;
+
+                // G. FORWARD MOMENTUM
+                const pseudoTarget = { nodeId: move.targetNodeId, player: p };
+                let progressDelta = getMarbleProgress(pseudoTarget) - getMarbleProgress(marble);
+                score += (progressDelta * 2.5);
+
+                // H. DEFENSIVE AWARENESS (Risk & Survival)
+                let currentDanger = 0;
+                let futureDanger = 0;
+                gameState.marbles.forEach(oppM => {
+                    if (oppM.player.id === p.id || gameState.nodes[oppM.nodeId].type === 'BASE') return;
+                    let oppProg = getMarbleProgress(oppM);
+
+                    // Are we currently being hunted?
+                    let myCurrentProg = getMarbleProgress(marble);
+                    let currentDist = myCurrentProg - oppProg;
+                    if (currentDist > 0 && currentDist <= 6 && currentNode.type === 'MAIN') currentDanger += 1500; // We are in the crosshairs! Move!
+
+                    // Will we land in front of someone?
+                    let myFutureProg = getMarbleProgress(pseudoTarget);
+                    let futureDist = myFutureProg - oppProg;
+                    if (futureDist > 0 && futureDist <= 6 && target.type === 'MAIN') futureDanger += 1200; // Landing here is risky!
+                });
+                score += (currentDanger - futureDanger);
+
+                // I. OVERSHOOT & ASSASSINATION
+                let isOvershoot = false;
+                if (move.path.includes(p.homeEntryNode) && target.type !== 'HOME') isOvershoot = true;
+                if (move.type === 'STAR_JUMP' && currentNode.id === exitStarNode.id) isOvershoot = true;
+
+                if (isOvershoot) {
+                    let overshootScore = -15000;
+                    if (victim) {
+                        let victimHomeCount = gameState.marbles.filter(m => m.player.id === victim.player.id && victim.player.homeNodes.includes(m.nodeId)).length;
+                        let myHomeCount = gameState.marbles.filter(m => m.player.id === p.id && p.homeNodes.includes(m.nodeId)).length;
+                        if (victimHomeCount >= 2 && myHomeCount < 3) overshootScore = 20000;
+                    }
+                    score += overshootScore;
+                }
             }
 
             if (score > bestScore) {
                 bestScore = score;
                 bestMove = move;
             }
+        });
 
-        }); // <-- This correctly ends the validMoves loop!
-
-        // If the best available move is a heavily penalized overshoot, just pass the turn.
-        if (bestMove && bestScore > -5000) {
-            executeMove(bestMove);
-        } else {
-            playerPass();
-        }
+        // If the best available move is heavily penalized, just pass the turn.
+        if (bestMove && bestScore > -5000) executeMove(bestMove);
+        else playerPass();
     }
 
 function isSafe(targetId, player) {
@@ -1858,8 +1948,14 @@ function endTurn() {
         gameState.nodes.forEach(n => {
             ctx.beginPath();
             ctx.arc(n.x, n.y, HOLE_RADIUS, 0, Math.PI * 2);
-            ctx.fillStyle = '#1f2937';
+
+            // Default Deep Hole Gradient
+            const holeGrad = ctx.createRadialGradient(n.x, n.y, HOLE_RADIUS, n.x, n.y, 2);
+            holeGrad.addColorStop(0, '#000000'); // Dark rim shadow
+            holeGrad.addColorStop(1, '#374151'); // Lighter bottom to simulate depth
+            ctx.fillStyle = holeGrad;
             ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+
             if (n.type === 'STAR') {
                 drawStarIcon(n.x, n.y);
                 return;
@@ -1869,9 +1965,23 @@ function endTurn() {
                 ctx.fillStyle = c.ringHex;
                 ctx.strokeStyle = c.hex;
                 ctx.lineWidth = 2;
+
+                // Draw the colored painted ring
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw the deep hole inside the ring
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, HOLE_RADIUS - 3, 0, Math.PI * 2);
+                ctx.fillStyle = holeGrad;
+                ctx.fill();
+                return; // Skip the final fill below since we custom drew it
             }
             else if (n.type === 'CENTER') {
-                ctx.fillStyle = '#000';
+                const centerGrad = ctx.createRadialGradient(n.x, n.y, HOLE_RADIUS, n.x, n.y, 1);
+                centerGrad.addColorStop(0, '#000000');
+                centerGrad.addColorStop(1, '#111827');
+                ctx.fillStyle = centerGrad;
                 ctx.strokeStyle = '#fbbf24';
                 ctx.lineWidth = 3;
             }
@@ -1913,20 +2023,27 @@ function endTurn() {
     function drawMarble(x, y, c, raised) {
         ctx.beginPath();
         ctx.arc(x, y, MARBLE_RADIUS, 0, Math.PI * 2);
-        const g = ctx.createRadialGradient(x - 3, y - 3, 2, x, y, MARBLE_RADIUS);
-        g.addColorStop(0, '#fff');
-        g.addColorStop(0.5, c);
-        g.addColorStop(1, '#000');
+
+        // 3D Glass Sphere Effect (Specular Highlight)
+        const g = ctx.createRadialGradient(x - 3, y - 3, 1, x, y, MARBLE_RADIUS);
+        g.addColorStop(0, '#ffffff'); // Bright reflection of the "light source"
+        g.addColorStop(0.3, c);       // True color
+        g.addColorStop(1, '#000000'); // Shadowed bottom edge
         ctx.fillStyle = g;
-        if (raised) {
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 10;
-            ctx.shadowOffsetY = 5;
-        }
+
+        // Dynamic Drop Shadows
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur = raised ? 12 : 4;
+        ctx.shadowOffsetY = raised ? 8 : 2;
+        ctx.shadowOffsetX = raised ? 4 : 1;
+
         ctx.fill();
+
+        // Reset shadows so they don't bleed into other drawings
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
+        ctx.shadowOffsetX = 0;
     }
 
     function drawHighlights() {
@@ -1934,16 +2051,34 @@ function endTurn() {
             gameState.validMoves.forEach(move => {
                 const m = gameState.marbles.find(mb => mb.id === move.marbleId);
                 const n = gameState.nodes[m.nodeId];
+                const t = gameState.nodes[move.targetNodeId];
+
+                // Highlight marbles that CAN move
                 ctx.beginPath();
                 ctx.arc(n.x, n.y, MARBLE_RADIUS + 4, 0, Math.PI * 2);
-                ctx.strokeStyle = '#fff';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
                 ctx.lineWidth = 2;
                 ctx.stroke();
+
+                // If this specific marble is selected, show its Ghost destinations
                 if (gameState.selectedMarble && gameState.selectedMarble.id === m.id) {
-                    const t = gameState.nodes[move.targetNodeId];
-                    ctx.globalAlpha = 0.6;
-                    drawMarble(t.x, t.y, m.player.color.hex);
-                    ctx.globalAlpha = 1;
+                    // Golden target ring
+                    ctx.beginPath();
+                    ctx.arc(t.x, t.y, HOLE_RADIUS + 4, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#fbbf24';
+                    ctx.lineWidth = 3;
+                    ctx.shadowColor = '#fbbf24';
+                    ctx.shadowBlur = 10;
+                    ctx.stroke();
+
+                    // Reset shadow for the ghost marble
+                    ctx.shadowBlur = 0;
+
+                    // Draw the Ghost Marble
+                    ctx.globalAlpha = 0.4;
+                    drawMarble(t.x, t.y, m.player.color.hex, false);
+                    ctx.globalAlpha = 1.0;
+
                     if (move.type === 'STAR_JUMP') drawLabel(t.x, t.y, 'JUMP');
                     if (move.type === 'ENTER_CENTER') drawLabel(t.x, t.y, 'ENTER');
                     if (move.type === 'EXIT_CENTER') drawLabel(t.x, t.y, 'EXIT');
@@ -2035,7 +2170,18 @@ function endTurn() {
         const x = (touch.clientX - rect.left - rect.width / 2 - camera.x) / (scale * camera.zoom);
         const y = (touch.clientY - rect.top - rect.height / 2 - camera.y) / (scale * camera.zoom);
 
-        const hit = gameState.nodes.find(n => Math.hypot(n.x - x, n.y - y) < HOLE_RADIUS * 2.5);
+        // FIX: Find the absolute closest node to the click, preventing overlapping hitbox errors
+        let hit = null;
+        let minDist = HOLE_RADIUS * 2.5;
+
+        gameState.nodes.forEach(n => {
+            const dist = Math.hypot(n.x - x, n.y - y);
+            if (dist < minDist) {
+                minDist = dist;
+                hit = n;
+            }
+        });
+
         if (hit) {
             if (gameState.selectedMarble) {
                 const move = gameState.validMoves.find(m => m.marbleId === gameState.selectedMarble.id && m.targetNodeId === hit.id);
@@ -2054,6 +2200,9 @@ function endTurn() {
 
     // Event Listeners
     window.addEventListener('keydown', (e) => {
+        // CHAT FIX: Do not trigger game controls if the user is typing in a text box!
+        if (document.activeElement.tagName === 'INPUT') return;
+
         const p = gameState.players[gameState.currPlayer];
         const isMyTurn = (Network.isHost() && p.peerId === 'host') || (!Network.isHost() && p.peerId === Network.getMyId());
         if (e.code === 'Space' && gameState.phase === 'ROLL' && !p.isAI && isMyTurn) rollDie();
@@ -2079,6 +2228,7 @@ function endTurn() {
 
     function updateUI(msg) {
         const p = gameState.players[gameState.currPlayer];
+        if (!p) return; // Safety check for early init
         const badge = document.getElementById('current-player-badge');
         const txt = document.getElementById('turn-text');
         const msgEl = document.getElementById('message-area');
@@ -2088,11 +2238,15 @@ function endTurn() {
         txt.innerText = `${p.name} ${p.isAI ? '(CPU)' : ''}`;
         txt.style.color = p.color.hex;
 
-        // FIX: If no specific message is provided, default to the correct phase instructions
+        // Determine if it is the local user's turn
+        const isMyTurn = (Network.isHost() && p.peerId === 'host') || (!Network.isHost() && p.peerId === Network.getMyId());
+
         if (msg) {
             msgEl.innerText = msg;
         } else {
-            if (gameState.phase === 'ROLL') {
+            if (!isMyTurn && !p.isAI) {
+                msgEl.innerText = `Waiting for ${p.name}...`;
+            } else if (gameState.phase === 'ROLL') {
                 msgEl.innerText = p.isAI ? "CPU is rolling..." : "Roll the die!";
             } else if (gameState.phase === 'SELECT') {
                 msgEl.innerText = p.isAI ? "CPU Thinking..." : "Select a marble";
@@ -2101,10 +2255,7 @@ function endTurn() {
             }
         }
 
-        // TURN RESTRICTION: Check if the current player's ID matches the local browser ID
-        const isMyTurn = (Network.isHost() && p.peerId === 'host') || (!Network.isHost() && p.peerId === Network.getMyId());
         const canRoll = gameState.phase === 'ROLL' && !p.isAI && isMyTurn;
-
         btn.disabled = !canRoll;
         btn.style.opacity = canRoll ? 1 : 0.5;
         btn.style.cursor = canRoll ? 'pointer' : 'not-allowed';
@@ -2133,6 +2284,9 @@ function endTurn() {
         scale = Math.min(canvas.width, canvas.height) / 950;
         if (gameState.players.length) draw();
     }
+
+    window.addEventListener('click', () => Sound.init(), { once: true });
+    window.addEventListener('touchstart', () => Sound.init(), { once: true });
 
 Network.init(); // <-- Add this to start PeerJS
 initSetupUI();
