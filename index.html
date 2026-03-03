@@ -643,7 +643,16 @@ let scale = 1;
             const roomId = urlParams.get('room');
             isHostObj = !roomId;
 
-            peer = new Peer();
+            // Explicitly define STUN servers to help external connections punch through firewalls
+            peer = new Peer({
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' }
+                    ]
+                }
+            });
 
             peer.on('open', (id) => {
                 myPeerId = id;
