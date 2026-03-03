@@ -860,9 +860,27 @@ let scale = 1;
                     gameState.pausedPhase = null;
                     updateUI();
                 } else if (data.type === 'SYNC_TURN') {
-                    // FIX: Hard-sync the turn to whatever the Host dictates
+                    // CRITICAL FIX: The Host dictates the turn transition. Client passively accepts it.
                     gameState.currPlayer = data.currPlayer;
+                    gameState.phase = 'ROLL';
+                    gameState.die = null;
+                    clearInterval(gameState.timer);
+                    clearTimeout(gameState.timeoutId);
+                    document.getElementById('pass-btn').classList.add('hidden');
+                    Sound.turn();
                     updateUI();
+                    draw();
+                    startTurnTimer();
+                    saveGameState();
+                } else if (data.type === 'SYNC_LAST_STAND') {
+                    const winner = gameState.players.find(p => p.id === data.winnerId);
+                    if (winner) {
+                        gameState.phase = 'WIN';
+                        gameState.finishedPlayers.push(winner);
+                        document.getElementById('winner-name').innerText = winner.name + " (Last Standing)";
+                        document.getElementById('victory-overlay').classList.remove('hidden');
+                        document.getElementById('continue-btn').style.display = 'none';
+                    }
                 } else if (data.type === 'SYNC_RESTORE') {
                     const backup = data.backup;
                     gameState.config.speed = backup.speed;
@@ -1142,12 +1160,15 @@ function toggleMenu() {
             gameState.phase = gameState.pausedPhase;
             gameState.pausedPhase = null;
             Network.broadcastGameEvent({ type: 'SYNC_RESUME', phase: gameState.phase });
-            
+
             if (gameState.phase === 'ROLL' || gameState.phase === 'SELECT') {
-                startTurnTimer(gameState.timeLeft); 
+                startTurnTimer(gameState.timeLeft);
                 checkAI();
             } else if (gameState.phase === 'WAIT') {
-                gameState.timeoutId = setTimeout(endTurn, 500); 
+                // CRITICAL FIX: Only the Host sets the timer
+                if (Network.isHost()) {
+                    gameState.timeoutId = setTimeout(endTurn, 500);
+                }
             }
             updateUI();
         }
@@ -1648,15 +1669,18 @@ function calculateMoves() {
         
         if(p.isAI) checkAI(); 
         
-    } else {
+      } else {
         gameState.phase = 'WAIT';
         document.getElementById('pass-btn').classList.add('hidden');
         addLog(p, "No moves possible", gameState.die);
         updateUI("No moves!");
-        gameState.timeoutId = setTimeout(endTurn, 1500);
+        
+        // CRITICAL FIX: Only the Host sets the timer to end the turn
+        if (Network.isHost()) {
+            gameState.timeoutId = setTimeout(endTurn, 1500);
+            }
+        }
     }
-    draw();
-}
 
 function playerPass(fromNetwork = false) {
     if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
@@ -1674,7 +1698,7 @@ function playerPass(fromNetwork = false) {
 
     const p = gameState.players[gameState.currPlayer];
     addLog(p, "Passed Turn", gameState.die);
-    endTurn();
+    if (Network.isHost()) endTurn();
 }
 function executeAIMove() {
     if (gameState.phase !== 'SELECT' || gameState.phase === 'PAUSED') return;
@@ -2028,10 +2052,11 @@ function finishMove(move, marble) {
         if (gameState.die === 6) {
             gameState.phase = 'ROLL';
             updateUI("Rolled 6! Roll Again.");
-            startTurnTimer(); 
+            startTurnTimer();
             checkAI();
         } else {
-            endTurn();
+            // CRITICAL FIX: Only the host ends the turn when an animation finishes
+            if (Network.isHost()) endTurn();
         }
     }
     saveGameState(); // <-- Saves the game state here
@@ -2051,7 +2076,7 @@ function continueGame(fromNetwork = false) {
     }
 
     document.getElementById('victory-overlay').classList.add('hidden');
-    endTurn(); 
+    if (Network.isHost()) endTurn(); 
 }
 
 function endTurn() {
@@ -2060,7 +2085,9 @@ function endTurn() {
     clearInterval(gameState.timer); 
     clearTimeout(gameState.timeoutId); 
     
-    Sound.turn();
+    // SOUND FIX: Played on Host here, Client plays it when SYNC_TURN is received
+    if (Network.isHost()) Sound.turn();
+    
     let nextIdx = (gameState.currPlayer + 1) % gameState.players.length;
     let attempts = 0;
     while(gameState.finishedPlayers.includes(gameState.players[nextIdx]) && attempts < 6) {
@@ -2076,6 +2103,11 @@ function endTurn() {
         document.getElementById('winner-name').innerText = winner.name + " (Last Standing)";
         document.getElementById('victory-overlay').classList.remove('hidden');
         document.getElementById('continue-btn').style.display = 'none';
+        
+        // SYNC FIX: Tell the client that someone won by default
+        if (Network.isHost()) {
+            Network.broadcastGameEvent({ type: 'SYNC_LAST_STAND', winnerId: winner.id });
+        }
         return;
     }
 
@@ -2087,9 +2119,9 @@ function endTurn() {
     draw();
     startTurnTimer();
 
-    saveGameState(); // <-- Saves the game state here
+    saveGameState();
 
-    // FIX: Force all clients to sync to the exact active player
+    // The Host dictates the turn transition to all clients
     if (Network.isHost()) {
         Network.broadcastGameEvent({ type: 'SYNC_TURN', currPlayer: gameState.currPlayer });
     }
